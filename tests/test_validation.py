@@ -65,10 +65,10 @@ def test_valid_day_passes_validation() -> None:
     validate_or_raise(day, OptimizerConfig())
 
 
-def test_duplicate_arrival_numbers_are_case_insensitive() -> None:
+def test_numeric_and_prefixed_equivalent_arrivals_are_duplicates() -> None:
     day = OperationalDay(
         operational_date=date(2026, 9, 2),
-        flights=(arrival("UA123"), arrival(" ua123 ")),
+        flights=(arrival("123"), arrival("UA123")),
     )
 
     duplicate = next(
@@ -80,25 +80,40 @@ def test_duplicate_arrival_numbers_are_case_insensitive() -> None:
     assert "flights[0]" in duplicate.message
 
 
-def test_duplicate_departure_numbers_are_rejected() -> None:
+def test_case_and_zero_padded_equivalent_departures_are_duplicates() -> None:
     day = OperationalDay(
         operational_date=date(2026, 9, 2),
-        flights=(departure("1814"), departure("1814")),
+        flights=(departure("UA123"), departure("ua00123")),
     )
 
-    assert any(
-        issue.code == "DUPLICATE_DEPARTURE_FLIGHT_NUMBER"
+    duplicate = next(
+        issue
         for issue in validate_operational_day(day)
+        if issue.code == "DUPLICATE_DEPARTURE_FLIGHT_NUMBER"
     )
+    assert duplicate.path == "flights[1].departure_flight_number"
 
 
 def test_same_number_once_in_each_direction_is_valid() -> None:
     day = OperationalDay(
         operational_date=date(2026, 9, 2),
-        flights=(arrival("1814"), departure("1814")),
+        flights=(arrival("123"), departure("UA123")),
     )
 
     assert validate_operational_day(day) == ()
+
+
+def test_malformed_numbers_do_not_participate_in_duplicate_comparison() -> None:
+    day = OperationalDay(
+        operational_date=date(2026, 9, 2),
+        flights=(arrival("UA"), arrival("UA")),
+    )
+
+    codes = [issue.code for issue in validate_operational_day(day)]
+
+    assert codes.count("MALFORMED_ARRIVAL_FLIGHT_NUMBER") == 2
+    assert "DUPLICATE_ARRIVAL_FLIGHT_NUMBER" not in codes
+    assert "INVALID_DERIVED_WORK_WINDOW" not in codes
 
 
 def test_two_distinct_turn_pairs_are_valid() -> None:

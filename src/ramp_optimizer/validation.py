@@ -254,8 +254,8 @@ def validate_operational_day(
     active_config = config or OptimizerConfig()
     issues: list[ValidationIssue] = []
     employee_ids: dict[str, int] = {}
-    arrival_numbers: dict[str, int] = {}
-    departure_numbers: dict[str, int] = {}
+    arrival_numbers: dict[int, int] = {}
+    departure_numbers: dict[int, int] = {}
     datetime_awareness: set[bool] = set()
 
     if not isinstance(day.operational_date, date) or isinstance(
@@ -459,7 +459,7 @@ def validate_operational_day(
 
         if arrival_complete:
             _record_directional_uniqueness(
-                flight.arrival_flight_number,
+                arrival_number,
                 index,
                 "arrival",
                 arrival_numbers,
@@ -467,7 +467,7 @@ def validate_operational_day(
             )
         if departure_complete:
             _record_directional_uniqueness(
-                flight.departure_flight_number,
+                departure_number,
                 index,
                 "departure",
                 departure_numbers,
@@ -710,23 +710,22 @@ def _validate_directional_flight_number(
 
 
 def _record_directional_uniqueness(
-    value: str,
+    numeric_flight_number: int,
     index: int,
     direction: str,
-    seen: dict[str, int],
+    seen: dict[int, int],
     issues: list[ValidationIssue],
 ) -> None:
-    normalized = value.strip().casefold()
-    if normalized in seen:
+    if numeric_flight_number in seen:
         issues.append(
             ValidationIssue(
                 f"DUPLICATE_{direction.upper()}_FLIGHT_NUMBER",
                 f"flights[{index}].{direction}_flight_number",
-                f"duplicates flights[{seen[normalized]}].{direction}_flight_number",
+                f"duplicates flights[{seen[numeric_flight_number]}].{direction}_flight_number",
             )
         )
     else:
-        seen[normalized] = index
+        seen[numeric_flight_number] = index
 
 
 def _valid_express_threshold(config: OptimizerConfig) -> bool:

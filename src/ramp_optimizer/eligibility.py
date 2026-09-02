@@ -111,8 +111,8 @@ def assess_employee_flight_eligibility(
     fixed_assignments: Iterable[FixedAssignment] = (),
     *,
     include_leads: bool = False,
-    allow_trainees: bool = False,
-    allow_possible_ramp_support: bool = False,
+    allow_trainees: bool | None = None,
+    allow_possible_ramp_support: bool | None = None,
 ) -> EligibilityAssessment:
     """Return a deterministic legal assessment for one employee-flight pair.
 
@@ -121,6 +121,11 @@ def assess_employee_flight_eligibility(
     Qualifications are intentionally not part of ordinary assignment eligibility.
     """
 
+    resolved_allow_trainees, resolved_allow_possible_ramp_support = (
+        _resolve_configured_role_policy(
+            config, allow_trainees, allow_possible_ramp_support
+        )
+    )
     employee_shifts = tuple(
         shift
         for shift in shifts
@@ -149,8 +154,8 @@ def assess_employee_flight_eligibility(
         if role_is_assignment_eligible(
             shift.normalized_role,
             include_leads=include_leads,
-            allow_trainees=allow_trainees,
-            allow_possible_ramp_support=allow_possible_ramp_support,
+            allow_trainees=resolved_allow_trainees,
+            allow_possible_ramp_support=resolved_allow_possible_ramp_support,
         )
     )
     if not role_eligible_shifts:
@@ -167,8 +172,8 @@ def assess_employee_flight_eligibility(
         facts.work_start,
         facts.work_end,
         include_leads=include_leads,
-        allow_trainees=allow_trainees,
-        allow_possible_ramp_support=allow_possible_ramp_support,
+        allow_trainees=resolved_allow_trainees,
+        allow_possible_ramp_support=resolved_allow_possible_ramp_support,
     )
     if not containing_shifts:
         return _ineligible(
@@ -220,3 +225,21 @@ def _ineligible(
 
 def _same_employee_id(left: str, right: str) -> bool:
     return left.strip().casefold() == right.strip().casefold()
+
+
+def _resolve_configured_role_policy(
+    config: OptimizerConfig,
+    allow_trainees: bool | None,
+    allow_possible_ramp_support: bool | None,
+) -> tuple[bool, bool]:
+    resolved_allow_trainees = (
+        config.allow_trainees_for_assignments
+        if allow_trainees is None
+        else allow_trainees
+    )
+    resolved_allow_possible_ramp_support = (
+        config.allow_possible_ramp_support_for_assignments
+        if allow_possible_ramp_support is None
+        else allow_possible_ramp_support
+    )
+    return resolved_allow_trainees, resolved_allow_possible_ramp_support

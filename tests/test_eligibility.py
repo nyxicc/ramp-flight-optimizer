@@ -1,5 +1,6 @@
 """Tests for deterministic employee-to-flight eligibility."""
 
+from dataclasses import replace
 from datetime import datetime
 
 import pytest
@@ -59,6 +60,7 @@ def assess(
     shifts: tuple[EmployeeShift, ...] | None = None,
     flight: Flight | None = None,
     fixed: tuple[FixedAssignment, ...] = (),
+    config: OptimizerConfig = CONFIG,
     **policy: bool,
 ):
     return assess_employee_flight_eligibility(
@@ -67,7 +69,7 @@ def assess(
         if shifts is not None
         else (shift(at(5), at(13)),),
         flight or departure(),
-        CONFIG,
+        config,
         fixed,
         **policy,
     )
@@ -201,6 +203,41 @@ def test_special_roles_require_their_explicit_override(
 
     assert not assess(shifts=(employee_shift,)).eligible
     assert assess(shifts=(employee_shift,), **{policy_name: True}).eligible
+
+
+@pytest.mark.parametrize(
+    ("role", "config_field", "override_name"),
+    [
+        (
+            OperationalRole.TRAINEE,
+            "allow_trainees_for_assignments",
+            "allow_trainees",
+        ),
+        (
+            OperationalRole.POSSIBLE_RAMP_SUPPORT,
+            "allow_possible_ramp_support_for_assignments",
+            "allow_possible_ramp_support",
+        ),
+    ],
+)
+def test_configured_role_policy_and_explicit_overrides(
+    role: OperationalRole, config_field: str, override_name: str
+) -> None:
+    employee_shift = shift(at(5), at(13), role)
+    enabled_config = replace(CONFIG, **{config_field: True})
+
+    assert not assess(shifts=(employee_shift,)).eligible
+    assert assess(shifts=(employee_shift,), config=enabled_config).eligible
+    assert not assess(
+        shifts=(employee_shift,),
+        config=enabled_config,
+        **{override_name: False},
+    ).eligible
+    assert assess(
+        shifts=(employee_shift,),
+        config=CONFIG,
+        **{override_name: True},
+    ).eligible
 
 
 @pytest.mark.parametrize("role", [OperationalRole.NON_RAMP, OperationalRole.UNKNOWN])

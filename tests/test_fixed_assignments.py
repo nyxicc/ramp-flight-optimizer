@@ -175,6 +175,41 @@ def test_explicit_lead_policy_can_make_fixed_assignment_legal() -> None:
     assert validate_operational_day(day, include_leads=True) == ()
 
 
+@pytest.mark.parametrize(
+    ("role", "config_field", "override_name"),
+    [
+        (
+            OperationalRole.TRAINEE,
+            "allow_trainees_for_assignments",
+            "allow_trainees",
+        ),
+        (
+            OperationalRole.POSSIBLE_RAMP_SUPPORT,
+            "allow_possible_ramp_support_for_assignments",
+            "allow_possible_ramp_support",
+        ),
+    ],
+)
+def test_fixed_validation_uses_configured_role_policy(
+    role: OperationalRole, config_field: str, override_name: str
+) -> None:
+    target = flight("101", 9)
+    day = day_with_fixed(
+        (target,),
+        (FixedAssignment("E001", target),),
+        shifts=(employee_shift(role=role),),
+    )
+    enabled_config = replace(OptimizerConfig(), **{config_field: True})
+
+    assert validate_operational_day(day, enabled_config) == ()
+    assert any(
+        issue.code == "ILLEGAL_FIXED_ASSIGNMENT"
+        for issue in validate_operational_day(
+            day, enabled_config, **{override_name: False}
+        )
+    )
+
+
 def test_unqualified_employee_may_hold_legal_fixed_assignment() -> None:
     target = flight("101", 9)
     equal_reference = replace(target)

@@ -255,8 +255,8 @@ def validate_operational_day(
     config: OptimizerConfig | None = None,
     *,
     include_leads: bool = False,
-    allow_trainees: bool = False,
-    allow_possible_ramp_support: bool = False,
+    allow_trainees: bool | None = None,
+    allow_possible_ramp_support: bool | None = None,
 ) -> tuple[ValidationIssue, ...]:
     """Return all structural errors in one operational-day input."""
 
@@ -608,8 +608,8 @@ def validate_or_raise(
     config: OptimizerConfig,
     *,
     include_leads: bool = False,
-    allow_trainees: bool = False,
-    allow_possible_ramp_support: bool = False,
+    allow_trainees: bool | None = None,
+    allow_possible_ramp_support: bool | None = None,
 ) -> None:
     """Raise one aggregate exception if configuration or input is invalid."""
 
@@ -635,8 +635,8 @@ def _validate_fixed_assignments(
     *,
     allow_calculations: bool,
     include_leads: bool,
-    allow_trainees: bool,
-    allow_possible_ramp_support: bool,
+    allow_trainees: bool | None,
+    allow_possible_ramp_support: bool | None,
 ) -> None:
     records: list[tuple[int, FixedAssignment, str, int, int]] = []
     seen_assignments: dict[tuple[str, int], int] = {}

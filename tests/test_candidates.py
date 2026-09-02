@@ -122,6 +122,55 @@ def test_explicit_lead_override_builds_lead_candidate() -> None:
     ) == (CandidateAssignment("L001", target),)
 
 
+@pytest.mark.parametrize(
+    ("role", "config_field", "override_name"),
+    [
+        (
+            OperationalRole.TRAINEE,
+            "allow_trainees_for_assignments",
+            "allow_trainees",
+        ),
+        (
+            OperationalRole.POSSIBLE_RAMP_SUPPORT,
+            "allow_possible_ramp_support_for_assignments",
+            "allow_possible_ramp_support",
+        ),
+    ],
+)
+def test_candidate_generation_uses_configured_role_policy(
+    role: OperationalRole, config_field: str, override_name: str
+) -> None:
+    target = flight("101", 9)
+    day = OperationalDay(
+        date(2026, 9, 2),
+        employees=(employee("E001"),),
+        employee_shifts=(shift("E001", role=role),),
+        flights=(target,),
+    )
+    enabled_config = replace(OptimizerConfig(), **{config_field: True})
+
+    assert build_candidate_assignments(day, OptimizerConfig()) == ()
+    assert build_candidate_assignments(day, enabled_config) == (
+        CandidateAssignment("E001", target),
+    )
+    assert build_candidate_assignments(
+        day, enabled_config, **{override_name: False}
+    ) == ()
+
+
+def test_lead_emergency_config_does_not_enable_ordinary_candidates() -> None:
+    target = flight("101", 9)
+    day = OperationalDay(
+        date(2026, 9, 2),
+        employees=(employee("L001"),),
+        employee_shifts=(shift("L001", role=OperationalRole.RAMP_LEAD),),
+        flights=(target,),
+    )
+    config = replace(OptimizerConfig(), allow_leads_for_minimum_staffing=True)
+
+    assert build_candidate_assignments(day, config) == ()
+
+
 def test_empty_employees_and_flights_return_empty_tuple() -> None:
     day = OperationalDay(date(2026, 9, 2))
 

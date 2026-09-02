@@ -11,8 +11,8 @@ def build_candidate_assignments(
     config: OptimizerConfig,
     *,
     include_leads: bool = False,
-    allow_trainees: bool = False,
-    allow_possible_ramp_support: bool = False,
+    allow_trainees: bool | None = None,
+    allow_possible_ramp_support: bool | None = None,
 ) -> tuple[CandidateAssignment, ...]:
     """Return legal, non-fixed pairs in employee order then flight order."""
 

@@ -54,6 +54,17 @@ def test_boolean_is_not_accepted_as_an_integer_configuration_value() -> None:
     )
 
 
+def test_invalid_timing_and_express_threshold_are_reported() -> None:
+    config = replace(
+        OptimizerConfig(), arrival_preparation_minutes=0, express_threshold=-1
+    )
+
+    codes = {issue.code for issue in validate_config(config)}
+
+    assert "INVALID_POSITIVE_INTEGER" in codes
+    assert "INVALID_EXPRESS_THRESHOLD" in codes
+
+
 def test_malformed_staffing_type_returns_issue_instead_of_crashing() -> None:
     config = replace(OptimizerConfig(), minimum_staff="3")  # type: ignore[arg-type]
 

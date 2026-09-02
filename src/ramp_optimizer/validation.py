@@ -8,6 +8,12 @@ from math import isfinite
 from ramp_optimizer.config import OptimizerConfig, TeamWorkImportConfig
 from ramp_optimizer.enums import OperationalRole, Qualification
 from ramp_optimizer.models import EmployeeShift, OperationalDay
+from ramp_optimizer.timing import (
+    FlightDerivationError,
+    FlightNumberParseError,
+    derive_work_window,
+    parse_numeric_flight_number,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -240,12 +246,16 @@ def validate_teamwork_import_config(
     return tuple(issues)
 
 
-def validate_operational_day(day: OperationalDay) -> tuple[ValidationIssue, ...]:
+def validate_operational_day(
+    day: OperationalDay, config: OptimizerConfig | None = None
+) -> tuple[ValidationIssue, ...]:
     """Return all structural errors in one operational-day input."""
 
+    active_config = config or OptimizerConfig()
     issues: list[ValidationIssue] = []
     employee_ids: dict[str, int] = {}
-    flight_numbers: dict[str, int] = {}
+    arrival_numbers: dict[str, int] = {}
+    departure_numbers: dict[str, int] = {}
     datetime_awareness: set[bool] = set()
 
     if not isinstance(day.operational_date, date) or isinstance(
@@ -355,57 +365,122 @@ def validate_operational_day(day: OperationalDay) -> tuple[ValidationIssue, ...]
 
     for index, flight in enumerate(day.flights):
         path = f"flights[{index}]"
-        normalized_number = _normalized_text(flight.flight_number)
-        if normalized_number is None:
+        if (
+            flight.arrival_flight_number is None
+            and flight.arrival_time is None
+            and flight.departure_flight_number is None
+            and flight.departure_time is None
+        ):
             issues.append(
                 ValidationIssue(
-                    "INVALID_FLIGHT_NUMBER",
-                    f"{path}.flight_number",
-                    "must be a non-blank string",
-                )
-            )
-        elif normalized_number in flight_numbers:
-            issues.append(
-                ValidationIssue(
-                    "DUPLICATE_FLIGHT_NUMBER",
-                    f"{path}.flight_number",
-                    f"duplicates flights[{flight_numbers[normalized_number]}].flight_number",
-                )
-            )
-        else:
-            flight_numbers[normalized_number] = index
-
-        if flight.arrival_time is None and flight.departure_time is None:
-            issues.append(
-                ValidationIssue(
-                    "MISSING_FLIGHT_TIMES",
+                    "MISSING_FLIGHT_SIDES",
                     path,
-                    "must supply arrival_time, departure_time, or both",
+                    "must supply an arrival side, departure side, or both",
                 )
             )
 
-        arrival_valid = True
-        departure_valid = True
+        arrival_number, arrival_number_valid = _validate_directional_flight_number(
+            flight.arrival_flight_number, "arrival", path, issues
+        )
+        departure_number, departure_number_valid = _validate_directional_flight_number(
+            flight.departure_flight_number, "departure", path, issues
+        )
+
+        if flight.arrival_flight_number is None and flight.arrival_time is not None:
+            issues.append(
+                ValidationIssue(
+                    "ARRIVAL_TIME_WITHOUT_FLIGHT_NUMBER",
+                    f"{path}.arrival_time",
+                    "arrival_time requires arrival_flight_number",
+                )
+            )
+        if flight.arrival_flight_number is not None and flight.arrival_time is None:
+            issues.append(
+                ValidationIssue(
+                    "ARRIVAL_FLIGHT_NUMBER_WITHOUT_TIME",
+                    f"{path}.arrival_flight_number",
+                    "arrival_flight_number requires arrival_time",
+                )
+            )
+        if flight.departure_flight_number is None and flight.departure_time is not None:
+            issues.append(
+                ValidationIssue(
+                    "DEPARTURE_TIME_WITHOUT_FLIGHT_NUMBER",
+                    f"{path}.departure_time",
+                    "departure_time requires departure_flight_number",
+                )
+            )
+        if flight.departure_flight_number is not None and flight.departure_time is None:
+            issues.append(
+                ValidationIssue(
+                    "DEPARTURE_FLIGHT_NUMBER_WITHOUT_TIME",
+                    f"{path}.departure_flight_number",
+                    "departure_flight_number requires departure_time",
+                )
+            )
+
+        arrival_time_valid = flight.arrival_time is None
+        departure_time_valid = flight.departure_time is None
         if flight.arrival_time is not None:
-            arrival_valid = _record_datetime(
+            arrival_time_valid = _record_datetime(
                 flight.arrival_time,
                 f"{path}.arrival_time",
                 issues,
                 datetime_awareness,
+                code="INVALID_ARRIVAL_TIME",
             )
         if flight.departure_time is not None:
-            departure_valid = _record_datetime(
+            departure_time_valid = _record_datetime(
                 flight.departure_time,
                 f"{path}.departure_time",
                 issues,
                 datetime_awareness,
+                code="INVALID_DEPARTURE_TIME",
             )
-        if (
-            flight.arrival_time is not None
+
+        arrival_complete = (
+            arrival_number_valid
+            and flight.arrival_flight_number is not None
+            and flight.arrival_time is not None
+            and arrival_time_valid
+        )
+        departure_complete = (
+            departure_number_valid
+            and flight.departure_flight_number is not None
             and flight.departure_time is not None
-            and arrival_valid
-            and departure_valid
+            and departure_time_valid
+        )
+        arrival_side_valid = (
+            flight.arrival_flight_number is None and flight.arrival_time is None
+        ) or arrival_complete
+        departure_side_valid = (
+            flight.departure_flight_number is None and flight.departure_time is None
+        ) or departure_complete
+
+        if arrival_complete:
+            _record_directional_uniqueness(
+                flight.arrival_flight_number,
+                index,
+                "arrival",
+                arrival_numbers,
+                issues,
+            )
+        if departure_complete:
+            _record_directional_uniqueness(
+                flight.departure_flight_number,
+                index,
+                "departure",
+                departure_numbers,
+                issues,
+            )
+
+        turn_datetimes_comparable = (
+            arrival_complete
+            and departure_complete
             and _same_awareness(flight.arrival_time, flight.departure_time)
+        )
+        if (
+            turn_datetimes_comparable
             and flight.departure_time <= flight.arrival_time
         ):
             issues.append(
@@ -413,6 +488,59 @@ def validate_operational_day(day: OperationalDay) -> tuple[ValidationIssue, ...]
                     "INVALID_TURN_TIMES",
                     path,
                     "departure_time must be later than arrival_time for a turn",
+                )
+            )
+
+        if (
+            arrival_complete
+            and departure_complete
+            and _valid_express_threshold(active_config)
+            and (arrival_number >= active_config.express_threshold)
+            != (departure_number >= active_config.express_threshold)
+        ):
+            issues.append(
+                ValidationIssue(
+                    "MIXED_TURN_SERVICE_CATEGORY",
+                    path,
+                    "turn arrival and departure must both be Mainline or both be Express",
+                )
+            )
+
+        prerequisites_valid = (
+            (arrival_complete or departure_complete)
+            and arrival_side_valid
+            and departure_side_valid
+            and not (
+                arrival_complete
+                and departure_complete
+                and not turn_datetimes_comparable
+            )
+            and not (
+                turn_datetimes_comparable
+                and flight.departure_time <= flight.arrival_time
+            )
+            and _valid_timing_config(active_config)
+        )
+        if prerequisites_valid:
+            try:
+                work_start, work_end = derive_work_window(flight, active_config)
+                if work_start >= work_end:
+                    raise FlightDerivationError(
+                        "derived work window must have positive duration"
+                    )
+            except FlightDerivationError as error:
+                issues.append(
+                    ValidationIssue(
+                        "INVALID_DERIVED_WORK_WINDOW", path, str(error)
+                    )
+                )
+
+        if flight.gate is not None and not isinstance(flight.gate, str):
+            issues.append(
+                ValidationIssue(
+                    "INVALID_GATE",
+                    f"{path}.gate",
+                    "must be a string or None",
                 )
             )
         if not isinstance(flight.heavy, bool):
@@ -436,7 +564,7 @@ def validate_operational_day(day: OperationalDay) -> tuple[ValidationIssue, ...]
 def validate_or_raise(day: OperationalDay, config: OptimizerConfig) -> None:
     """Raise one aggregate exception if configuration or input is invalid."""
 
-    issues = validate_config(config) + validate_operational_day(day)
+    issues = validate_config(config) + validate_operational_day(day, config)
     if issues:
         raise InputValidationError(issues)
 
@@ -490,10 +618,11 @@ def _record_datetime(
     path: str,
     issues: list[ValidationIssue],
     datetime_awareness: set[bool],
+    code: str = "INVALID_DATETIME",
 ) -> bool:
     if not isinstance(value, datetime):
         issues.append(
-            ValidationIssue("INVALID_DATETIME", path, "must be a datetime value")
+            ValidationIssue(code, path, "must be a datetime value")
         )
         return False
     datetime_awareness.add(_is_aware(value))
@@ -538,3 +667,78 @@ def _is_finite_number_in_range(
         return False
     lower_ok = value > minimum if minimum_exclusive else value >= minimum
     return lower_ok and value <= maximum
+
+
+def _validate_directional_flight_number(
+    value: object,
+    direction: str,
+    flight_path: str,
+    issues: list[ValidationIssue],
+) -> tuple[int | None, bool]:
+    if value is None:
+        return None, True
+    field_path = f"{flight_path}.{direction}_flight_number"
+    if not isinstance(value, str):
+        issues.append(
+            ValidationIssue(
+                f"INVALID_{direction.upper()}_FLIGHT_NUMBER",
+                field_path,
+                "must be a string or None",
+            )
+        )
+        return None, False
+    if not value.strip():
+        issues.append(
+            ValidationIssue(
+                f"BLANK_{direction.upper()}_FLIGHT_NUMBER",
+                field_path,
+                "must not be blank",
+            )
+        )
+        return None, False
+    try:
+        return parse_numeric_flight_number(value), True
+    except FlightNumberParseError:
+        issues.append(
+            ValidationIssue(
+                f"MALFORMED_{direction.upper()}_FLIGHT_NUMBER",
+                field_path,
+                "must contain optional letters followed by terminal digits",
+            )
+        )
+        return None, False
+
+
+def _record_directional_uniqueness(
+    value: str,
+    index: int,
+    direction: str,
+    seen: dict[str, int],
+    issues: list[ValidationIssue],
+) -> None:
+    normalized = value.strip().casefold()
+    if normalized in seen:
+        issues.append(
+            ValidationIssue(
+                f"DUPLICATE_{direction.upper()}_FLIGHT_NUMBER",
+                f"flights[{index}].{direction}_flight_number",
+                f"duplicates flights[{seen[normalized]}].{direction}_flight_number",
+            )
+        )
+    else:
+        seen[normalized] = index
+
+
+def _valid_express_threshold(config: OptimizerConfig) -> bool:
+    return _is_integer(config.express_threshold) and config.express_threshold >= 0
+
+
+def _valid_timing_config(config: OptimizerConfig) -> bool:
+    return all(
+        _is_integer(value) and value > 0
+        for value in (
+            config.arrival_preparation_minutes,
+            config.arrival_offload_minutes,
+            config.departure_work_minutes,
+        )
+    )

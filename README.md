@@ -11,7 +11,10 @@ The repository currently provides:
 - immutable employee, shift, flight, and result domain models;
 - structured input validation;
 - a privacy-conscious importer for TeamWork daily schedule exports;
-- assignment-eligibility checks over separate availability intervals.
+- assignment-eligibility checks over separate availability intervals;
+- deterministic flight classification, work-window, and service-category
+  derivation;
+- pure half-open interval overlap behavior.
 
 The CP-SAT scheduling engine is not implemented yet.
 
@@ -48,17 +51,105 @@ original position text, note presence, and SwapBoard state live in immutable
 `ShiftImportRecord` objects. `ScheduleImportResult.shifts` exposes only the core
 shift values needed by eligibility and the future optimizer.
 
+## Flight movements and derived operational facts
+
+One `Flight` represents one aircraft movement. A turn has two flight numbers
+because its inbound arrival and outbound departure are different operational
+flights. Only source facts are stored on the immutable input model:
+
+```python
+from datetime import datetime
+
+from ramp_optimizer import Flight
+
+arrival_only = Flight(
+    arrival_flight_number="1428",
+    arrival_time=datetime(2026, 9, 2, 9, 2),
+)
+departure_only = Flight(
+    departure_flight_number="2690",
+    departure_time=datetime(2026, 9, 2, 6, 0),
+)
+turn = Flight(
+    arrival_flight_number="1428",
+    arrival_time=datetime(2026, 9, 2, 9, 2),
+    departure_flight_number="1814",
+    departure_time=datetime(2026, 9, 2, 10, 10),
+    gate="B4",
+)
+```
+
+Flight type, work windows, parsed numbers, and Express status are derived by
+pure functions rather than copied onto `Flight`:
+
+```python
+from ramp_optimizer import OptimizerConfig, derive_flight_operational_facts
+
+facts = derive_flight_operational_facts(turn, OptimizerConfig())
+
+assert facts.flight_type == "TURN"
+assert facts.work_start == datetime(2026, 9, 2, 8, 52)
+assert facts.work_end == datetime(2026, 9, 2, 10, 10)
+assert facts.arrival_numeric_flight_number == 1428
+assert facts.departure_numeric_flight_number == 1814
+assert facts.express is False
+```
+
+The work-window formulas are:
+
+- arrival-only: `[arrival - arrival_preparation, arrival + arrival_offload)`;
+- departure-only: `[departure - departure_work, departure)`;
+- turn: `[arrival - arrival_preparation, departure)`.
+
+The default timing values are 10 minutes of arrival preparation, 20 minutes
+of arrival offload, and 60 minutes of departure work. These half-open intervals
+mean that two windows touching at one endpoint do not overlap. Full `datetime`
+arithmetic handles midnight without guessing a date: a 00:30 departure on
+September 3 has a default window beginning at 23:30 on September 2. A turn
+crossing midnight must explicitly give its departure the following date.
+
+Numeric parsing accepts values such as `1428`, `UA123`, and `OO3550`, preserves
+the original display value on `Flight`, and rejects values without a terminal
+numeric portion. A movement is Express exactly when its parsed number is
+greater than or equal to `express_threshold` (3000 by default), so 2999 is
+Mainline while 3000 is Express. Both directional numbers on a turn must resolve
+to the same category; mixed Mainline/Express turns are invalid.
+
+Arrival numbers are unique among arrivals, and departure numbers are unique
+among departures, using case-insensitive normalized comparisons. The same
+number may appear once in each direction. For example, one turn may depart as
+1814 and a later turn may arrive as 1814. Gate is retained only for display; it
+does not affect classification, timing, staffing, eligibility, or optimization.
+
+This entire derivation layer is deterministic and solver-independent. It does
+not assign employees or impose assignment-conflict constraints.
+
 ## Staffing configuration
 
 There is no global maximum-staff setting. Staffing requirements are derived
 from the input flight's `heavy` flag without modifying the flight:
 
 ```python
+from datetime import datetime
+
 from ramp_optimizer import Flight, OptimizerConfig, staffing_requirements_for
 
 config = OptimizerConfig()
-normal = staffing_requirements_for(Flight("UA123"), config)
-heavy = staffing_requirements_for(Flight("UA456", heavy=True), config)
+normal = staffing_requirements_for(
+    Flight(
+        arrival_flight_number="UA123",
+        arrival_time=datetime(2026, 9, 2, 8),
+    ),
+    config,
+)
+heavy = staffing_requirements_for(
+    Flight(
+        departure_flight_number="UA456",
+        departure_time=datetime(2026, 9, 2, 9),
+        heavy=True,
+    ),
+    config,
+)
 
 assert normal.maximum == 4
 assert heavy.maximum == 5

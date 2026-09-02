@@ -1,6 +1,7 @@
 """Tests for solver-independent flight staffing requirements."""
 
 from dataclasses import fields, replace
+from datetime import datetime
 
 from ramp_optimizer import (
     Flight,
@@ -20,7 +21,11 @@ def test_default_staffing_configuration_is_valid() -> None:
 
 
 def test_normal_flight_preferred_and_maximum_are_four() -> None:
-    requirements = staffing_requirements_for(Flight("UA123"), OptimizerConfig())
+    flight = Flight(
+        arrival_flight_number="UA123",
+        arrival_time=datetime(2026, 9, 2, 8),
+    )
+    requirements = staffing_requirements_for(flight, OptimizerConfig())
 
     assert requirements.minimum == 3
     assert requirements.preferred == 4
@@ -28,8 +33,13 @@ def test_normal_flight_preferred_and_maximum_are_four() -> None:
 
 
 def test_heavy_flight_preferred_and_maximum_are_five() -> None:
+    flight = Flight(
+        departure_flight_number="UA456",
+        departure_time=datetime(2026, 9, 2, 9),
+        heavy=True,
+    )
     requirements = staffing_requirements_for(
-        Flight("UA456", heavy=True), OptimizerConfig()
+        flight, OptimizerConfig()
     )
 
     assert requirements.minimum == 3
@@ -50,7 +60,11 @@ def test_invalid_staffing_relationships_are_rejected() -> None:
 
 def test_ordinary_flight_cannot_resolve_to_heavy_maximum() -> None:
     config = replace(OptimizerConfig(), heavy_preferred_staff=9)
-    ordinary = staffing_requirements_for(Flight("UA789", heavy=False), config)
+    flight = Flight(
+        arrival_flight_number="UA789",
+        arrival_time=datetime(2026, 9, 2, 10),
+    )
+    ordinary = staffing_requirements_for(flight, config)
 
     assert ordinary.maximum == config.normal_preferred_staff == 4
     assert ordinary.maximum != config.heavy_preferred_staff

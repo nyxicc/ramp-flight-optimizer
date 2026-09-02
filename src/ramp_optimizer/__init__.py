@@ -21,6 +21,7 @@ from ramp_optimizer.eligibility import (
     employee_is_available_for_interval,
     role_is_assignment_eligible,
 )
+from ramp_optimizer.intervals import InvalidIntervalError, intervals_overlap
 from ramp_optimizer.models import (
     Employee,
     EmployeeShift,
@@ -39,6 +40,15 @@ from ramp_optimizer.models import (
     VacancyRecord,
 )
 from ramp_optimizer.staffing import StaffingRequirements, staffing_requirements_for
+from ramp_optimizer.timing import (
+    FlightDerivationError,
+    FlightNumberParseError,
+    FlightOperationalFacts,
+    classify_flight_type,
+    derive_flight_operational_facts,
+    derive_work_window,
+    parse_numeric_flight_number,
+)
 from ramp_optimizer.validation import (
     InputValidationError,
     ValidationIssue,
@@ -66,9 +76,13 @@ __all__ = [
     "FairnessMetrics",
     "Flight",
     "FlightAssignmentResult",
+    "FlightDerivationError",
+    "FlightNumberParseError",
+    "FlightOperationalFacts",
     "FlightType",
     "ImportIssue",
     "InputValidationError",
+    "InvalidIntervalError",
     "import_teamwork_schedule",
     "ObjectiveValue",
     "OperationalRole",
@@ -78,10 +92,15 @@ __all__ = [
     "OptimizationStatus",
     "OptimizerConfig",
     "Qualification",
+    "classify_flight_type",
+    "derive_flight_operational_facts",
+    "derive_work_window",
+    "intervals_overlap",
     "normalize_header",
     "normalize_identity_name",
     "normalize_position_label",
     "position_mapping",
+    "parse_numeric_flight_number",
     "role_is_assignment_eligible",
     "ScheduleImportResult",
     "ScheduleWarning",

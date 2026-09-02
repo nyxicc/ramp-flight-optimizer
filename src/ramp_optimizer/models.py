@@ -59,11 +59,13 @@ class VacancyRecord:
 
 @dataclass(frozen=True, slots=True)
 class Flight:
-    """A flight whose type and work window will be derived from current times."""
+    """One aircraft movement with optional arrival and departure sides."""
 
-    flight_number: str
+    arrival_flight_number: str | None = None
+    departure_flight_number: str | None = None
     arrival_time: datetime | None = None
     departure_time: datetime | None = None
+    gate: str | None = None
     heavy: bool = False
 
 
@@ -121,7 +123,8 @@ class ScheduleWarning:
     code: WarningCode
     severity: WarningSeverity
     message: str
-    flight_number: str | None = None
+    arrival_flight_number: str | None = None
+    departure_flight_number: str | None = None
     employee_id: str | None = None
 
 
@@ -129,7 +132,7 @@ class ScheduleWarning:
 class FlightAssignmentResult:
     """Solved assignment and compliance facts for one flight."""
 
-    flight_number: str
+    flight: Flight
     flight_type: FlightType
     work_start: datetime
     work_end: datetime
@@ -151,7 +154,7 @@ class EmployeeScheduleResult:
     """Chronological assignments and transparent workload facts for an employee."""
 
     employee_id: str
-    assigned_flight_numbers: tuple[str, ...]
+    assigned_flights: tuple[Flight, ...]
     flight_count: int
     mainline_flight_count: int
     express_flight_count: int

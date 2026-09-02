@@ -22,7 +22,7 @@ class OperationalRole(StrEnum):
 
 
 class FlightType(StrEnum):
-    """Flight types inferred from the supplied arrival and departure times."""
+    """Movement types inferred from consistently populated directional sides."""
 
     ARRIVAL_ONLY = "ARRIVAL_ONLY"
     DEPARTURE_ONLY = "DEPARTURE_ONLY"

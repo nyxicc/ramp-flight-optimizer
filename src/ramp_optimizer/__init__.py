@@ -44,6 +44,7 @@ from ramp_optimizer.models import (
     ShiftImportRecord,
     VacancyRecord,
 )
+from ramp_optimizer.optimizer import optimize_minimum_staffing
 from ramp_optimizer.staffing import StaffingRequirements, staffing_requirements_for
 from ramp_optimizer.timing import (
     FlightDerivationError,
@@ -103,6 +104,7 @@ __all__ = [
     "OptimizationResult",
     "OptimizationStatus",
     "OptimizerConfig",
+    "optimize_minimum_staffing",
     "Qualification",
     "classify_flight_type",
     "derive_flight_operational_facts",

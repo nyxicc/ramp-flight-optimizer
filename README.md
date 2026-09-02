@@ -15,9 +15,11 @@ The repository currently provides:
 - deterministic flight classification, work-window, and service-category
   derivation;
 - pure half-open interval overlap behavior;
-- explainable employee-flight eligibility and validated candidate preprocessing.
+- explainable employee-flight eligibility and validated candidate preprocessing;
+- a limited CP-SAT optimizer for minimum and preferred staffing.
 
-The CP-SAT scheduling engine is not implemented yet.
+Qualification coverage, breaks, fairness, workload scoring, continuity, and
+emergency Lead solving are not implemented yet.
 
 ## Employee and availability model
 
@@ -117,10 +119,11 @@ Mainline while 3000 is Express. Both directional numbers on a turn must resolve
 to the same category; mixed Mainline/Express turns are invalid.
 
 Arrival numbers are unique among arrivals, and departure numbers are unique
-among departures, using case-insensitive normalized comparisons. The same
-number may appear once in each direction. For example, one turn may depart as
-1814 and a later turn may arrive as 1814. Gate is retained only for display; it
-does not affect classification, timing, staffing, eligibility, or optimization.
+among departures, using the parsed numeric value. Thus `123`, `UA123`, and
+`ua00123` are the same number for uniqueness. The same number may appear once
+in each direction. For example, one turn may depart as 1814 and a later turn
+may arrive as 1814. Gate is retained only for display; it does not affect
+classification, timing, staffing, eligibility, or optimization.
 
 This entire derivation layer is deterministic and solver-independent. It does
 not assign employees or impose assignment-conflict constraints.
@@ -161,8 +164,10 @@ assert assessment.eligible
 assert assessment.reasons == ()
 ```
 
-`RAMP_AGENT` is the only role allowed by default. Leads, trainees, and possible
-ramp support require their corresponding explicit policy overrides; non-ramp
+`RAMP_AGENT` is the only role allowed by default. Trainee and possible-support
+eligibility default to their `OptimizerConfig` settings and may be overridden
+explicitly per call. Leads require the independent `include_leads=True` pass;
+the emergency-Lead configuration does not enable them automatically. Non-ramp
 and unknown roles remain excluded. Source position text is not consulted.
 `PUSH` and `CLOSE_OUT` qualifications also do not filter generic eligibility:
 they will later be used to evaluate coverage by an assigned team.
@@ -214,6 +219,54 @@ heavy = staffing_requirements_for(
 assert normal.maximum == 4
 assert heavy.maximum == 5
 ```
+
+## Minimum staffing optimizer
+
+`optimize_minimum_staffing()` is the first limited CP-SAT scheduling entry
+point. It creates `x[employee, flight]` Boolean variables only for eligible,
+non-fixed candidate pairs. Disabled, unavailable, role-ineligible,
+fixed-conflicting, and already-fixed pairs therefore have no decision variable.
+Fixed assignments are constants that always contribute to their flight's crew.
+
+The hard constraints prevent one employee from working overlapping half-open
+flight windows and cap each flight at the maximum returned by
+`staffing_requirements_for()`. Fixed staffing above that maximum is rejected by
+validation before model construction. No transition time or gate-distance rule
+is applied.
+
+Minimum staffing is recoverable rather than mandatory, so a constrained day
+still returns its best partial schedule. The optimizer uses five sequential
+integer objective stages:
+
+1. Maximize flights reaching minimum staffing.
+2. Minimize total minimum-staffing shortfall.
+3. Minimize the largest individual minimum shortfall.
+4. Maximize flights reaching preferred staffing.
+5. Minimize total preferred-staffing shortfall.
+
+Each proven optimum is fixed before solving the next stage. Sequential solves
+preserve true priority without arbitrary giant weights, and all stages share
+one total time budget. For two simultaneous flights and five available
+employees, the result is `3 + 2`: one flight reaches the three-person minimum,
+then the remaining two employees reduce total shortage on the other flight.
+Such a partial schedule can still be mathematically `OPTIMAL`.
+
+```python
+from ramp_optimizer import optimize_minimum_staffing
+
+result = optimize_minimum_staffing(day, OptimizerConfig())
+```
+
+Results include stable assigned and fixed employee IDs, staffing limits and
+shortfalls, flight timing and classification, objective values with proof
+status, warnings for known below-minimum flights, and runtime. Qualification
+coverage is `None`, fairness is `None`, and employee break/workload results are
+empty because those stages have not been evaluated. Leads are excluded from
+this ordinary optimizer even when emergency Lead staffing is configured.
+
+This optimizer is not operationally complete: it does not evaluate push or
+close-out coverage, breaks, fairness, workload, streaks, team continuity, or an
+emergency Lead second pass.
 
 ## TeamWork schedule import
 

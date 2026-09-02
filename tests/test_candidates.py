@@ -2,9 +2,9 @@
 
 from dataclasses import replace
 from datetime import date, datetime
-import sys
 
 import pytest
+from ortools.sat.python import cp_model
 
 from ramp_optimizer import (
     CandidateAssignment,
@@ -210,12 +210,12 @@ def test_candidate_building_does_not_mutate_inputs() -> None:
     assert day.fixed_assignments == (fixed,)
 
 
-def test_candidate_preprocessing_does_not_import_ortools() -> None:
+def test_candidate_preprocessing_does_not_construct_solver_model(monkeypatch) -> None:
     day = OperationalDay(date(2026, 9, 2))
 
-    build_candidate_assignments(day, OptimizerConfig())
+    def fail_if_constructed():
+        raise AssertionError("candidate preprocessing must not construct CP-SAT")
 
-    assert not any(
-        module_name == "ortools" or module_name.startswith("ortools.")
-        for module_name in sys.modules
-    )
+    monkeypatch.setattr(cp_model, "CpModel", fail_if_constructed)
+
+    assert build_candidate_assignments(day, OptimizerConfig()) == ()

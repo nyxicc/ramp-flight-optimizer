@@ -172,15 +172,20 @@ class FlightAssignmentResult:
     work_start: datetime
     work_end: datetime
     assigned_employee_ids: tuple[str, ...]
+    fixed_employee_ids: tuple[str, ...]
     staffing_count: int
     minimum_staff: int
     preferred_staff: int
     maximum_staff: int
     staffing_status: StaffingStatus
-    push_covered: bool | None
-    close_covered: bool | None
+    minimum_met: bool
+    minimum_shortfall: int
+    preferred_met: bool
+    preferred_shortfall: int
     express: bool
     heavy: bool
+    push_covered: bool | None = None
+    close_covered: bool | None = None
     warnings: tuple[ScheduleWarning, ...] = ()
 
 
@@ -220,6 +225,7 @@ class ObjectiveValue:
     stage: int
     name: str
     value: int
+    proven_optimal: bool
 
 
 @dataclass(frozen=True, slots=True)
@@ -240,9 +246,9 @@ class OptimizationResult:
     status: OptimizationStatus
     flight_results: tuple[FlightAssignmentResult, ...]
     employee_results: tuple[EmployeeScheduleResult, ...]
-    fairness_metrics: FairnessMetrics
+    fairness_metrics: FairnessMetrics | None
     attempts: tuple[OptimizationAttemptSummary, ...]
     objective_values: tuple[ObjectiveValue, ...]
     warnings: tuple[ScheduleWarning, ...] = ()
-    emergency_lead_staffing_used: bool = False
+    emergency_lead_staffing_used: bool | None = None
     solver_runtime_seconds: float = 0.0

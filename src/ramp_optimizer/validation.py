@@ -10,6 +10,7 @@ from ramp_optimizer.eligibility import assess_employee_flight_eligibility
 from ramp_optimizer.enums import OperationalRole, Qualification
 from ramp_optimizer.intervals import InvalidIntervalError, intervals_overlap
 from ramp_optimizer.models import EmployeeShift, FixedAssignment, Flight, OperationalDay
+from ramp_optimizer.staffing import staffing_requirements_for
 from ramp_optimizer.timing import (
     FlightDerivationError,
     FlightNumberParseError,
@@ -700,6 +701,29 @@ def _validate_fixed_assignments(
             (index, fixed, normalized_employee_id, employee_index, flight_index)
         )
 
+    if _valid_staffing_config(config):
+        fixed_count_by_flight: dict[int, int] = defaultdict(int)
+        overstaffed_flights: set[int] = set()
+        for index, _, _, _, flight_index in records:
+            if flight_index not in valid_flight_indices:
+                continue
+            fixed_count_by_flight[flight_index] += 1
+            maximum = staffing_requirements_for(
+                day.flights[flight_index], config
+            ).maximum
+            if (
+                fixed_count_by_flight[flight_index] > maximum
+                and flight_index not in overstaffed_flights
+            ):
+                issues.append(
+                    ValidationIssue(
+                        "FIXED_ASSIGNMENTS_EXCEED_MAXIMUM_STAFFING",
+                        f"fixed_assignments[{index}]",
+                        f"fixed staffing exceeds the flight maximum of {maximum}",
+                    )
+                )
+                overstaffed_flights.add(flight_index)
+
     if not allow_calculations:
         return
 
@@ -946,4 +970,17 @@ def _valid_timing_config(config: OptimizerConfig) -> bool:
             config.arrival_offload_minutes,
             config.departure_work_minutes,
         )
+    )
+
+
+def _valid_staffing_config(config: OptimizerConfig) -> bool:
+    values = (
+        config.minimum_staff,
+        config.normal_preferred_staff,
+        config.heavy_preferred_staff,
+    )
+    return (
+        all(_is_integer(value) and value > 0 for value in values)
+        and config.minimum_staff <= config.normal_preferred_staff
+        and config.normal_preferred_staff <= config.heavy_preferred_staff
     )

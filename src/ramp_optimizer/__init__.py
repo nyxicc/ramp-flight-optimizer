@@ -35,8 +35,10 @@ from ramp_optimizer.models import (
     OptimizationResult,
     ScheduleWarning,
     ScheduleImportResult,
+    ShiftImportRecord,
     VacancyRecord,
 )
+from ramp_optimizer.staffing import StaffingRequirements, staffing_requirements_for
 from ramp_optimizer.validation import (
     InputValidationError,
     ValidationIssue,
@@ -83,7 +85,10 @@ __all__ = [
     "role_is_assignment_eligible",
     "ScheduleImportResult",
     "ScheduleWarning",
+    "ShiftImportRecord",
+    "StaffingRequirements",
     "StaffingStatus",
+    "staffing_requirements_for",
     "TeamWorkImportConfig",
     "ValidationIssue",
     "WarningCode",

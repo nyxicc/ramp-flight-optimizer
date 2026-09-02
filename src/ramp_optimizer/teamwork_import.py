@@ -18,6 +18,7 @@ from ramp_optimizer.models import (
     EmployeeShift,
     ImportIssue,
     ScheduleImportResult,
+    ShiftImportRecord,
     VacancyRecord,
 )
 from ramp_optimizer.validation import validate_teamwork_import_config
@@ -216,7 +217,7 @@ def _import_rows(
     workbook_epoch: datetime,
 ) -> ScheduleImportResult:
     issues: list[ImportIssue] = []
-    shifts: list[EmployeeShift] = []
+    shift_records: list[ShiftImportRecord] = []
     vacancies: list[VacancyRecord] = []
     seen_rows: dict[str, int] = {}
     roster_by_name: dict[str, list[Employee]] = defaultdict(list)
@@ -339,21 +340,27 @@ def _import_rows(
         _validate_hours(
             values.get("hours"), interval, source_row, config, issues
         )
-        shifts.append(
-            EmployeeShift(
-                employee_id=matches[0].employee_id,
-                start=interval[0],
-                end=interval[1],
-                source_position=source_position,
-                normalized_role=role,
+        shift_records.append(
+            ShiftImportRecord(
+                shift=EmployeeShift(
+                    employee_id=matches[0].employee_id,
+                    start=interval[0],
+                    end=interval[1],
+                    normalized_role=role,
+                ),
                 source_row=source_row,
+                source_position=source_position,
                 notes_present=_has_value(values.get("notes")),
                 swapboard=swapboard,
             )
         )
 
-    _report_overlapping_shifts(shifts, issues)
-    return ScheduleImportResult(tuple(shifts), tuple(vacancies), tuple(issues))
+    _report_overlapping_shifts(shift_records, issues)
+    return ScheduleImportResult(
+        shift_records=tuple(shift_records),
+        vacancies=tuple(vacancies),
+        issues=tuple(issues),
+    )
 
 
 def _parse_interval(
@@ -510,22 +517,28 @@ def _validate_hours(
 
 
 def _report_overlapping_shifts(
-    shifts: list[EmployeeShift], issues: list[ImportIssue]
+    records: list[ShiftImportRecord], issues: list[ImportIssue]
 ) -> None:
-    by_employee: dict[str, list[EmployeeShift]] = defaultdict(list)
-    for shift in shifts:
-        by_employee[shift.employee_id].append(shift)
-    for employee_shifts in by_employee.values():
-        ordered = sorted(employee_shifts, key=lambda shift: (shift.start, shift.end))
-        for index, shift in enumerate(ordered):
+    by_employee: dict[str, list[ShiftImportRecord]] = defaultdict(list)
+    for record in records:
+        by_employee[record.shift.employee_id].append(record)
+    for employee_records in by_employee.values():
+        ordered = sorted(
+            employee_records,
+            key=lambda record: (record.shift.start, record.shift.end),
+        )
+        for index, record in enumerate(ordered):
             for earlier in ordered[:index]:
-                if shift.start < earlier.end and earlier.start < shift.end:
+                if (
+                    record.shift.start < earlier.shift.end
+                    and earlier.shift.start < record.shift.end
+                ):
                     issues.append(
                         ImportIssue(
                             IssueSeverity.ERROR,
                             "OVERLAPPING_EMPLOYEE_SHIFTS",
-                            f"Shift on row {shift.source_row} overlaps another shift for the same employee on row {earlier.source_row}.",
-                            source_row=shift.source_row,
+                            f"Shift on row {record.source_row} overlaps another shift for the same employee on row {earlier.source_row}.",
+                            source_row=record.source_row,
                         )
                     )
                     break

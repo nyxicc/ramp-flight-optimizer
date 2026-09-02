@@ -27,7 +27,7 @@ def employee(enabled: bool = True) -> Employee:
 
 
 def shift(start: datetime, end: datetime, role: OperationalRole) -> EmployeeShift:
-    return EmployeeShift("E001", start, end, role.value, role)
+    return EmployeeShift("E001", start, end, role)
 
 
 def test_complete_interval_must_fit_inside_one_shift() -> None:
@@ -51,7 +51,6 @@ def test_overnight_shift_uses_full_datetimes() -> None:
         "E001",
         at(22),
         datetime(2026, 9, 3, 6),
-        "Ramp Agent",
         OperationalRole.RAMP_AGENT,
     )
 

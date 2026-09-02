@@ -41,7 +41,6 @@ def validate_config(config: OptimizerConfig) -> tuple[ValidationIssue, ...]:
         "minimum_staff",
         "normal_preferred_staff",
         "heavy_preferred_staff",
-        "maximum_staff",
         "required_break_minutes",
         "consecutive_reset_minutes",
         "continuity_horizon_minutes",
@@ -63,31 +62,30 @@ def validate_config(config: OptimizerConfig) -> tuple[ValidationIssue, ...]:
         config.minimum_staff,
         config.normal_preferred_staff,
         config.heavy_preferred_staff,
-        config.maximum_staff,
     )
     if all(_is_integer(value) for value in staffing_values):
-        if not (
-            config.minimum_staff
-            <= config.normal_preferred_staff
-            <= config.maximum_staff
-        ):
+        if config.minimum_staff > config.normal_preferred_staff:
             issues.append(
                 ValidationIssue(
                     "INVALID_NORMAL_STAFFING_LEVELS",
                     "config",
-                    "normal staffing must satisfy minimum <= preferred <= maximum",
+                    "normal preferred staffing must be at least minimum staffing",
                 )
             )
-        if not (
-            config.minimum_staff
-            <= config.heavy_preferred_staff
-            <= config.maximum_staff
-        ):
+        if config.minimum_staff > config.heavy_preferred_staff:
             issues.append(
                 ValidationIssue(
                     "INVALID_HEAVY_STAFFING_LEVELS",
                     "config",
-                    "heavy staffing must satisfy minimum <= preferred <= maximum",
+                    "heavy preferred staffing must be at least minimum staffing",
+                )
+            )
+        if config.heavy_preferred_staff < config.normal_preferred_staff:
+            issues.append(
+                ValidationIssue(
+                    "INVALID_STAFFING_RELATIONSHIP",
+                    "config",
+                    "heavy preferred staffing must be at least normal preferred staffing",
                 )
             )
 
@@ -345,14 +343,6 @@ def validate_operational_day(day: OperationalDay) -> tuple[ValidationIssue, ...]
             elif normalized_id is not None:
                 valid_shifts[normalized_id].append((index, shift))
 
-        if _normalized_text(shift.source_position) is None:
-            issues.append(
-                ValidationIssue(
-                    "INVALID_SOURCE_POSITION",
-                    f"{path}.source_position",
-                    "must be a non-blank string",
-                )
-            )
         if not isinstance(shift.normalized_role, OperationalRole):
             issues.append(
                 ValidationIssue(
@@ -361,33 +351,6 @@ def validate_operational_day(day: OperationalDay) -> tuple[ValidationIssue, ...]
                     "must be an OperationalRole value",
                 )
             )
-        if shift.source_row is not None and (
-            not _is_integer(shift.source_row) or shift.source_row <= 0
-        ):
-            issues.append(
-                ValidationIssue(
-                    "INVALID_SOURCE_ROW",
-                    f"{path}.source_row",
-                    "must be a positive integer or None",
-                )
-            )
-        if not isinstance(shift.notes_present, bool):
-            issues.append(
-                ValidationIssue(
-                    "INVALID_BOOLEAN",
-                    f"{path}.notes_present",
-                    "must be a boolean",
-                )
-            )
-        if shift.swapboard is not None and not isinstance(shift.swapboard, bool):
-            issues.append(
-                ValidationIssue(
-                    "INVALID_SWAPBOARD",
-                    f"{path}.swapboard",
-                    "must be a boolean or None",
-                )
-            )
-
     _validate_shift_collisions(valid_shifts, issues)
 
     for index, flight in enumerate(day.flights):
@@ -494,14 +457,12 @@ def _validate_shift_collisions(
                 fingerprint = (
                     shift.start,
                     shift.end,
-                    _normalized_text(shift.source_position),
                     shift.normalized_role,
                 )
                 for earlier_index, earlier in ordered[:position]:
                     earlier_fingerprint = (
                         earlier.start,
                         earlier.end,
-                        _normalized_text(earlier.source_position),
                         earlier.normalized_role,
                     )
                     if fingerprint == earlier_fingerprint:

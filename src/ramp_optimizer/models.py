@@ -28,14 +28,21 @@ class Employee:
 
 @dataclass(frozen=True, slots=True)
 class EmployeeShift:
-    """One bounded availability interval imported for an employee."""
+    """One bounded availability interval used by assignment eligibility."""
 
     employee_id: str
     start: datetime
     end: datetime
-    source_position: str
     normalized_role: OperationalRole
-    source_row: int | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class ShiftImportRecord:
+    """TeamWork provenance kept outside the core optimizer shift model."""
+
+    shift: EmployeeShift
+    source_row: int
+    source_position: str
     notes_present: bool = False
     swapboard: bool | None = None
 
@@ -85,9 +92,15 @@ class ImportIssue:
 class ScheduleImportResult:
     """Usable imports plus all issues discovered in the workbook."""
 
-    shifts: tuple[EmployeeShift, ...] = ()
+    shift_records: tuple[ShiftImportRecord, ...] = ()
     vacancies: tuple[VacancyRecord, ...] = ()
     issues: tuple[ImportIssue, ...] = ()
+
+    @property
+    def shifts(self) -> tuple[EmployeeShift, ...]:
+        """Expose core shifts without leaking importer metadata downstream."""
+
+        return tuple(record.shift for record in self.shift_records)
 
     @property
     def has_fatal_issues(self) -> bool:

@@ -35,7 +35,6 @@ def shift(
         employee_id=employee_id,
         start=start,
         end=end,
-        source_position="Ramp Agent",
         normalized_role=OperationalRole.RAMP_AGENT,
     )
 

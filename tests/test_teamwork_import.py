@@ -106,7 +106,7 @@ def test_discovers_normalized_headers_after_title_and_blank_rows(
     result = import_teamwork_schedule(comprehensive_workbook, roster())
 
     assert not result.has_fatal_issues
-    assert any(shift.source_row == 5 for shift in result.shifts)
+    assert any(record.source_row == 5 for record in result.shift_records)
 
 
 def test_missing_required_headers_is_fatal(tmp_path: Path) -> None:
@@ -133,8 +133,8 @@ def test_optional_columns_may_be_absent(tmp_path: Path) -> None:
     result = import_teamwork_schedule(path, roster())
 
     assert len(result.shifts) == 1
-    assert result.shifts[0].notes_present is False
-    assert result.shifts[0].swapboard is None
+    assert result.shift_records[0].notes_present is False
+    assert result.shift_records[0].swapboard is None
 
 
 def test_excel_native_numeric_date_and_time_values_are_parsed(tmp_path: Path) -> None:
@@ -165,7 +165,7 @@ def test_source_position_is_preserved_while_mapping_is_normalized(
 
     result = import_teamwork_schedule(path, roster())
 
-    assert result.shifts[0].source_position == "  rAmP AgEnT  "
+    assert result.shift_records[0].source_position == "  rAmP AgEnT  "
     assert result.shifts[0].normalized_role is OperationalRole.RAMP_AGENT
 
 
@@ -200,7 +200,7 @@ def test_same_day_midnight_and_overnight_intervals(
     comprehensive_workbook: Path,
 ) -> None:
     result = import_teamwork_schedule(comprehensive_workbook, roster())
-    by_row = {shift.source_row: shift for shift in result.shifts}
+    by_row = {record.source_row: record.shift for record in result.shift_records}
 
     assert by_row[5].start == datetime(2026, 9, 2, 5)
     assert by_row[5].end == datetime(2026, 9, 2, 13)
@@ -220,7 +220,7 @@ def test_duration_blank_hours_and_invalid_shift_values_are_reported(
     assert "INVALID_START_VALUE" in codes
     assert "ZERO_LENGTH_SHIFT" in codes
     assert "IMPLAUSIBLY_LONG_SHIFT" in codes
-    assert any(shift.source_row == 21 for shift in result.shifts)
+    assert any(record.source_row == 21 for record in result.shift_records)
 
 
 def test_vacancies_are_separate_records_and_never_fictional_employees(
@@ -259,13 +259,17 @@ def test_multiple_rows_positions_overlap_and_duplicates(
     comprehensive_workbook: Path,
 ) -> None:
     result = import_teamwork_schedule(comprehensive_workbook, roster())
-    avery_shifts = [shift for shift in result.shifts if shift.employee_id == "E001"]
+    avery_records = [
+        record
+        for record in result.shift_records
+        if record.shift.employee_id == "E001"
+    ]
 
-    assert {shift.source_position for shift in avery_shifts} == {
+    assert {record.source_position for record in avery_records} == {
         "Ramp Agent",
         "Ramp Lead",
     }
-    assert len(avery_shifts) == 3
+    assert len(avery_records) == 3
     assert "DUPLICATE_SCHEDULE_ROW" in issue_codes(result)
     assert "OVERLAPPING_EMPLOYEE_SHIFTS" in issue_codes(result)
 
@@ -274,7 +278,7 @@ def test_position_mapping_is_conservative_and_training_is_not_eligible_by_role(
     comprehensive_workbook: Path,
 ) -> None:
     result = import_teamwork_schedule(comprehensive_workbook, roster())
-    by_row = {shift.source_row: shift for shift in result.shifts}
+    by_row = {record.source_row: record.shift for record in result.shift_records}
 
     assert by_row[5].normalized_role is OperationalRole.RAMP_AGENT
     assert by_row[6].normalized_role is OperationalRole.RAMP_LEAD
@@ -287,7 +291,7 @@ def test_position_mapping_is_conservative_and_training_is_not_eligible_by_role(
 
 def test_swapboard_is_parsed_conservatively(comprehensive_workbook: Path) -> None:
     result = import_teamwork_schedule(comprehensive_workbook, roster())
-    by_row = {shift.source_row: shift for shift in result.shifts}
+    by_row = {record.source_row: record for record in result.shift_records}
 
     assert by_row[5].swapboard is True
     assert by_row[19].swapboard is None
@@ -300,7 +304,7 @@ def test_notes_are_reduced_to_presence_and_never_leak(
     sensitive = "PRIVATE TRAINING DETAIL MUST NOT LEAK"
 
     result = import_teamwork_schedule(comprehensive_workbook, roster())
-    by_row = {shift.source_row: shift for shift in result.shifts}
+    by_row = {record.source_row: record for record in result.shift_records}
 
     assert by_row[5].notes_present is True
     assert all(sensitive not in issue.message for issue in result.issues)

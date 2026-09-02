@@ -35,7 +35,6 @@ class OptimizerConfig:
     minimum_staff: int = 3
     normal_preferred_staff: int = 4
     heavy_preferred_staff: int = 5
-    maximum_staff: int = 5
 
     required_break_minutes: int = 30
     consecutive_reset_minutes: int = 40

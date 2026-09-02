@@ -36,7 +36,6 @@ def test_employee_identity_is_separate_from_daily_shifts() -> None:
         employee_id=employee.employee_id,
         start=datetime(2026, 9, 2, 5),
         end=datetime(2026, 9, 2, 9),
-        source_position="Ramp Agent",
         normalized_role=OperationalRole.RAMP_AGENT,
     )
 
@@ -44,6 +43,10 @@ def test_employee_identity_is_separate_from_daily_shifts() -> None:
     assert not hasattr(employee, "shift_start")
     assert Qualification.PUSH in employee.qualifications
     assert shift.employee_id == employee.employee_id
+    assert not hasattr(shift, "source_row")
+    assert not hasattr(shift, "source_position")
+    assert not hasattr(shift, "notes_present")
+    assert not hasattr(shift, "swapboard")
 
 
 def test_flight_stores_source_times_without_deriving_phase_two_values() -> None:

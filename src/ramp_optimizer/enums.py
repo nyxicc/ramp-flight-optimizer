@@ -29,6 +29,16 @@ class FlightType(StrEnum):
     TURN = "TURN"
 
 
+class EligibilityReason(StrEnum):
+    """Stable explanations for an ineligible employee-flight pair."""
+
+    EMPLOYEE_DISABLED = "EMPLOYEE_DISABLED"
+    NO_EMPLOYEE_SHIFT = "NO_EMPLOYEE_SHIFT"
+    INELIGIBLE_OPERATIONAL_ROLE = "INELIGIBLE_OPERATIONAL_ROLE"
+    OUTSIDE_SHIFT = "OUTSIDE_SHIFT"
+    OVERLAPS_FIXED_ASSIGNMENT = "OVERLAPS_FIXED_ASSIGNMENT"
+
+
 class BreakStatus(StrEnum):
     """Outcome of the bracketed between-assignment break evaluation."""
 

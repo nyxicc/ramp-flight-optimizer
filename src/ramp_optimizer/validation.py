@@ -6,11 +6,15 @@ from datetime import date, datetime
 from math import isfinite
 
 from ramp_optimizer.config import OptimizerConfig, TeamWorkImportConfig
+from ramp_optimizer.eligibility import assess_employee_flight_eligibility
 from ramp_optimizer.enums import OperationalRole, Qualification
-from ramp_optimizer.models import EmployeeShift, OperationalDay
+from ramp_optimizer.intervals import InvalidIntervalError, intervals_overlap
+from ramp_optimizer.models import EmployeeShift, FixedAssignment, Flight, OperationalDay
 from ramp_optimizer.timing import (
     FlightDerivationError,
     FlightNumberParseError,
+    FlightOperationalFacts,
+    derive_flight_operational_facts,
     derive_work_window,
     parse_numeric_flight_number,
 )
@@ -247,15 +251,22 @@ def validate_teamwork_import_config(
 
 
 def validate_operational_day(
-    day: OperationalDay, config: OptimizerConfig | None = None
+    day: OperationalDay,
+    config: OptimizerConfig | None = None,
+    *,
+    include_leads: bool = False,
+    allow_trainees: bool = False,
+    allow_possible_ramp_support: bool = False,
 ) -> tuple[ValidationIssue, ...]:
     """Return all structural errors in one operational-day input."""
 
     active_config = config or OptimizerConfig()
     issues: list[ValidationIssue] = []
     employee_ids: dict[str, int] = {}
+    valid_employee_indices: set[int] = set()
     arrival_numbers: dict[int, int] = {}
     departure_numbers: dict[int, int] = {}
+    valid_flight_indices: set[int] = set()
     datetime_awareness: set[bool] = set()
 
     if not isinstance(day.operational_date, date) or isinstance(
@@ -271,6 +282,7 @@ def validate_operational_day(
 
     for index, employee in enumerate(day.employees):
         path = f"employees[{index}]"
+        issue_count_before_employee = len(issues)
         normalized_id = _normalized_text(employee.employee_id)
         if normalized_id is None:
             issues.append(
@@ -315,6 +327,8 @@ def validate_operational_day(
                     "must be a frozenset of Qualification values",
                 )
             )
+        if len(issues) == issue_count_before_employee:
+            valid_employee_indices.add(index)
 
     valid_shifts: dict[str, list[tuple[int, EmployeeShift]]] = defaultdict(list)
     for index, shift in enumerate(day.employee_shifts):
@@ -343,6 +357,7 @@ def validate_operational_day(
         end_valid = _record_datetime(
             shift.end, f"{path}.end", issues, datetime_awareness
         )
+        role_valid = isinstance(shift.normalized_role, OperationalRole)
         if start_valid and end_valid and _same_awareness(shift.start, shift.end):
             if shift.start >= shift.end:
                 issues.append(
@@ -350,10 +365,14 @@ def validate_operational_day(
                         "INVALID_EMPLOYEE_SHIFT", path, "start must be earlier than end"
                     )
                 )
-            elif normalized_id is not None:
+            elif (
+                normalized_id is not None
+                and normalized_id in employee_ids
+                and role_valid
+            ):
                 valid_shifts[normalized_id].append((index, shift))
 
-        if not isinstance(shift.normalized_role, OperationalRole):
+        if not role_valid:
             issues.append(
                 ValidationIssue(
                     "INVALID_OPERATIONAL_ROLE",
@@ -365,6 +384,7 @@ def validate_operational_day(
 
     for index, flight in enumerate(day.flights):
         path = f"flights[{index}]"
+        issue_count_before_flight = len(issues)
         if (
             flight.arrival_flight_number is None
             and flight.arrival_time is None
@@ -550,7 +570,11 @@ def validate_operational_day(
                 )
             )
 
-    if len(datetime_awareness) > 1:
+        if len(issues) == issue_count_before_flight:
+            valid_flight_indices.add(index)
+
+    mixed_datetime_awareness = len(datetime_awareness) > 1
+    if mixed_datetime_awareness:
         issues.append(
             ValidationIssue(
                 "MIXED_DATETIME_AWARENESS",
@@ -558,15 +582,197 @@ def validate_operational_day(
                 "all datetimes must be consistently timezone-aware or timezone-naive",
             )
         )
+
+    _validate_fixed_assignments(
+        day,
+        active_config,
+        employee_ids,
+        valid_employee_indices,
+        valid_shifts,
+        valid_flight_indices,
+        issues,
+        allow_calculations=(
+            not mixed_datetime_awareness
+            and _valid_timing_config(active_config)
+            and _valid_express_threshold(active_config)
+        ),
+        include_leads=include_leads,
+        allow_trainees=allow_trainees,
+        allow_possible_ramp_support=allow_possible_ramp_support,
+    )
     return tuple(issues)
 
 
-def validate_or_raise(day: OperationalDay, config: OptimizerConfig) -> None:
+def validate_or_raise(
+    day: OperationalDay,
+    config: OptimizerConfig,
+    *,
+    include_leads: bool = False,
+    allow_trainees: bool = False,
+    allow_possible_ramp_support: bool = False,
+) -> None:
     """Raise one aggregate exception if configuration or input is invalid."""
 
-    issues = validate_config(config) + validate_operational_day(day, config)
+    issues = validate_config(config) + validate_operational_day(
+        day,
+        config,
+        include_leads=include_leads,
+        allow_trainees=allow_trainees,
+        allow_possible_ramp_support=allow_possible_ramp_support,
+    )
     if issues:
         raise InputValidationError(issues)
+
+
+def _validate_fixed_assignments(
+    day: OperationalDay,
+    config: OptimizerConfig,
+    employee_ids: dict[str, int],
+    valid_employee_indices: set[int],
+    valid_shifts: dict[str, list[tuple[int, EmployeeShift]]],
+    valid_flight_indices: set[int],
+    issues: list[ValidationIssue],
+    *,
+    allow_calculations: bool,
+    include_leads: bool,
+    allow_trainees: bool,
+    allow_possible_ramp_support: bool,
+) -> None:
+    records: list[tuple[int, FixedAssignment, str, int, int]] = []
+    seen_assignments: dict[tuple[str, int], int] = {}
+
+    for index, fixed in enumerate(day.fixed_assignments):
+        path = f"fixed_assignments[{index}]"
+        if not isinstance(fixed, FixedAssignment):
+            issues.append(
+                ValidationIssue(
+                    "INVALID_FIXED_ASSIGNMENT",
+                    path,
+                    "must be a FixedAssignment value",
+                )
+            )
+            continue
+
+        normalized_employee_id = _normalized_text(fixed.employee_id)
+        employee_index = (
+            employee_ids.get(normalized_employee_id)
+            if normalized_employee_id is not None
+            else None
+        )
+        if employee_index is None:
+            issues.append(
+                ValidationIssue(
+                    "UNKNOWN_FIXED_ASSIGNMENT_EMPLOYEE",
+                    f"{path}.employee_id",
+                    "does not reference an employee in this operational day",
+                )
+            )
+
+        flight_index = _find_flight_index(fixed.flight, day.flights)
+        if flight_index is None:
+            issues.append(
+                ValidationIssue(
+                    "UNKNOWN_FIXED_ASSIGNMENT_FLIGHT",
+                    f"{path}.flight",
+                    "does not reference a flight in this operational day",
+                )
+            )
+
+        if (
+            normalized_employee_id is None
+            or employee_index is None
+            or flight_index is None
+        ):
+            continue
+
+        assignment_key = (normalized_employee_id, flight_index)
+        if assignment_key in seen_assignments:
+            issues.append(
+                ValidationIssue(
+                    "DUPLICATE_FIXED_ASSIGNMENT",
+                    path,
+                    f"duplicates fixed_assignments[{seen_assignments[assignment_key]}]",
+                )
+            )
+            continue
+        seen_assignments[assignment_key] = index
+        records.append(
+            (index, fixed, normalized_employee_id, employee_index, flight_index)
+        )
+
+    if not allow_calculations:
+        return
+
+    facts_by_flight: dict[int, FlightOperationalFacts] = {}
+    for flight_index in valid_flight_indices:
+        try:
+            facts_by_flight[flight_index] = derive_flight_operational_facts(
+                day.flights[flight_index], config
+            )
+        except FlightDerivationError:
+            continue
+
+    comparable_records: list[tuple[int, str, int]] = []
+    for index, fixed, normalized_id, employee_index, flight_index in records:
+        if (
+            employee_index not in valid_employee_indices
+            or flight_index not in facts_by_flight
+        ):
+            continue
+
+        employee_shifts = tuple(shift for _, shift in valid_shifts[normalized_id])
+        assessment = assess_employee_flight_eligibility(
+            day.employees[employee_index],
+            employee_shifts,
+            day.flights[flight_index],
+            config,
+            include_leads=include_leads,
+            allow_trainees=allow_trainees,
+            allow_possible_ramp_support=allow_possible_ramp_support,
+        )
+        if not assessment.eligible:
+            reason_values = ", ".join(reason.value for reason in assessment.reasons)
+            issues.append(
+                ValidationIssue(
+                    "ILLEGAL_FIXED_ASSIGNMENT",
+                    f"fixed_assignments[{index}]",
+                    f"violates employee-flight eligibility: {reason_values}",
+                )
+            )
+
+        for earlier_index, earlier_id, earlier_flight_index in comparable_records:
+            if earlier_id != normalized_id:
+                continue
+            earlier_facts = facts_by_flight[earlier_flight_index]
+            current_facts = facts_by_flight[flight_index]
+            try:
+                overlaps = intervals_overlap(
+                    earlier_facts.work_start,
+                    earlier_facts.work_end,
+                    current_facts.work_start,
+                    current_facts.work_end,
+                )
+            except InvalidIntervalError:
+                overlaps = False
+            if overlaps:
+                issues.append(
+                    ValidationIssue(
+                        "OVERLAPPING_FIXED_ASSIGNMENTS",
+                        f"fixed_assignments[{index}]",
+                        f"overlaps fixed_assignments[{earlier_index}]",
+                    )
+                )
+                break
+        comparable_records.append((index, normalized_id, flight_index))
+
+
+def _find_flight_index(flight: object, flights: tuple[Flight, ...]) -> int | None:
+    if not isinstance(flight, Flight):
+        return None
+    return next(
+        (index for index, candidate in enumerate(flights) if candidate == flight),
+        None,
+    )
 
 
 def _validate_shift_collisions(

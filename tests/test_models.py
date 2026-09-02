@@ -7,9 +7,14 @@ import pytest
 
 from ramp_optimizer import (
     BreakStatus,
+    CandidateAssignment,
+    EligibilityAssessment,
+    EligibilityReason,
     Employee,
     EmployeeShift,
+    FixedAssignment,
     Flight,
+    OperationalDay,
     OperationalRole,
     Qualification,
 )
@@ -94,6 +99,48 @@ def test_flight_does_not_store_derived_values() -> None:
         "gate",
         "heavy",
     }
+
+
+def test_fixed_and_candidate_models_retain_flight_without_synthetic_id() -> None:
+    flight = Flight(
+        departure_flight_number="2690",
+        departure_time=datetime(2026, 9, 2, 6),
+    )
+    fixed = FixedAssignment("E001", flight)
+    candidate = CandidateAssignment("E001", flight)
+    day = OperationalDay(
+        operational_date=datetime(2026, 9, 2).date(),
+        flights=(flight,),
+        fixed_assignments=(fixed,),
+    )
+
+    assert fixed.flight is flight
+    assert candidate.flight is flight
+    assert day.fixed_assignments == (fixed,)
+    assert not hasattr(fixed, "flight_id")
+    with pytest.raises(FrozenInstanceError):
+        fixed.employee_id = "E002"  # type: ignore[misc]
+
+
+def test_eligibility_assessment_enforces_reason_invariant() -> None:
+    flight = Flight(
+        departure_flight_number="2690",
+        departure_time=datetime(2026, 9, 2, 6),
+    )
+
+    eligible = EligibilityAssessment("E001", flight, True, ())
+    ineligible = EligibilityAssessment(
+        "E001", flight, False, (EligibilityReason.OUTSIDE_SHIFT,)
+    )
+
+    assert eligible.reasons == ()
+    assert not ineligible.eligible
+    with pytest.raises(ValueError):
+        EligibilityAssessment(
+            "E001", flight, True, (EligibilityReason.OUTSIDE_SHIFT,)
+        )
+    with pytest.raises(ValueError):
+        EligibilityAssessment("E001", flight, False, ())
 
 
 def test_break_status_vocabulary_matches_approved_reporting() -> None:

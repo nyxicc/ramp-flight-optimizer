@@ -14,7 +14,8 @@ The repository currently provides:
 - assignment-eligibility checks over separate availability intervals;
 - deterministic flight classification, work-window, and service-category
   derivation;
-- pure half-open interval overlap behavior.
+- pure half-open interval overlap behavior;
+- explainable employee-flight eligibility and validated candidate preprocessing.
 
 The CP-SAT scheduling engine is not implemented yet.
 
@@ -123,6 +124,65 @@ does not affect classification, timing, staffing, eligibility, or optimization.
 
 This entire derivation layer is deterministic and solver-independent. It does
 not assign employees or impose assignment-conflict constraints.
+
+## Employee-flight eligibility
+
+Eligibility answers whether an employee may legally work a flight; it does not
+decide whether that employee should be assigned. The assessment derives the
+approved work window from the timing layer and then checks, in deterministic
+order, that the employee is enabled, has a shift, has an allowed normalized
+role, fits the complete flight window inside one individual shift, and has no
+overlapping fixed assignment.
+
+```python
+from ramp_optimizer import (
+    Employee,
+    EmployeeShift,
+    OperationalRole,
+    OptimizerConfig,
+    assess_employee_flight_eligibility,
+)
+
+employee = Employee("E001", "Avery Stone")
+shift = EmployeeShift(
+    "E001",
+    datetime(2026, 9, 2, 5),
+    datetime(2026, 9, 2, 13),
+    OperationalRole.RAMP_AGENT,
+)
+assessment = assess_employee_flight_eligibility(
+    employee,
+    (shift,),
+    departure_only,
+    OptimizerConfig(),
+)
+
+assert assessment.eligible
+assert assessment.reasons == ()
+```
+
+`RAMP_AGENT` is the only role allowed by default. Leads, trainees, and possible
+ramp support require their corresponding explicit policy overrides; non-ramp
+and unknown roles remain excluded. Source position text is not consulted.
+`PUSH` and `CLOSE_OUT` qualifications also do not filter generic eligibility:
+they will later be used to evaluate coverage by an assigned team.
+
+Shift containment is inclusive at both availability boundaries: a flight may
+begin exactly at shift start or end exactly at shift end. Separate shifts are
+never merged to cover a work window that spans their gap.
+
+A `FixedAssignment` records a manual or locked employee-flight pairing without
+inventing a flight ID. A different fixed flight blocks a candidate only when
+their half-open work windows overlap. Thus `[08:00, 09:00)` conflicts with
+`[08:30, 09:30)` but not with `[09:00, 10:00)`. Fixed assignments are validated
+for employee and flight references, duplicates, overlaps, and underlying
+employee eligibility.
+
+`build_candidate_assignments()` validates the complete day and configuration,
+then returns only eligible, non-fixed employee-flight pairs in stable employee
+order followed by flight order. This preprocessing makes illegal assignments
+unrepresentable to the future solver. It does not construct a solver, choose
+assignments, enforce qualification coverage, or optimize staffing and fairness.
 
 ## Staffing configuration
 

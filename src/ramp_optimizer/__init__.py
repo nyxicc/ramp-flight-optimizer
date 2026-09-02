@@ -7,6 +7,7 @@ from ramp_optimizer.config import (
 )
 from ramp_optimizer.enums import (
     BreakStatus,
+    EligibilityReason,
     FlightType,
     IssueSeverity,
     OperationalRole,
@@ -17,18 +18,22 @@ from ramp_optimizer.enums import (
     WarningSeverity,
 )
 from ramp_optimizer.eligibility import (
+    assess_employee_flight_eligibility,
     eligible_shifts_for_interval,
     employee_is_available_for_interval,
     role_is_assignment_eligible,
 )
 from ramp_optimizer.intervals import InvalidIntervalError, intervals_overlap
 from ramp_optimizer.models import (
+    CandidateAssignment,
     Employee,
     EmployeeShift,
+    EligibilityAssessment,
     EmployeeScheduleResult,
     FairnessMetrics,
     Flight,
     FlightAssignmentResult,
+    FixedAssignment,
     ImportIssue,
     ObjectiveValue,
     OperationalDay,
@@ -57,6 +62,7 @@ from ramp_optimizer.validation import (
     validate_or_raise,
     validate_teamwork_import_config,
 )
+from ramp_optimizer.candidates import build_candidate_assignments
 from ramp_optimizer.teamwork_import import (
     import_teamwork_schedule,
     normalize_header,
@@ -66,16 +72,22 @@ from ramp_optimizer.teamwork_import import (
 )
 
 __all__ = [
+    "assess_employee_flight_eligibility",
     "BreakStatus",
+    "build_candidate_assignments",
+    "CandidateAssignment",
     "DEFAULT_POSITION_ROLE_MAPPINGS",
     "Employee",
     "EmployeeShift",
     "EmployeeScheduleResult",
+    "EligibilityAssessment",
+    "EligibilityReason",
     "eligible_shifts_for_interval",
     "employee_is_available_for_interval",
     "FairnessMetrics",
     "Flight",
     "FlightAssignmentResult",
+    "FixedAssignment",
     "FlightDerivationError",
     "FlightNumberParseError",
     "FlightOperationalFacts",

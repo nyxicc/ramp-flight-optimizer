@@ -5,6 +5,7 @@ from datetime import date, datetime
 
 from ramp_optimizer.enums import (
     BreakStatus,
+    EligibilityReason,
     FlightType,
     IssueSeverity,
     OperationalRole,
@@ -70,6 +71,14 @@ class Flight:
 
 
 @dataclass(frozen=True, slots=True)
+class FixedAssignment:
+    """An existing employee-flight assignment that must be honored."""
+
+    employee_id: str
+    flight: Flight
+
+
+@dataclass(frozen=True, slots=True)
 class OperationalDay:
     """Complete input for one operational-day optimization run."""
 
@@ -77,6 +86,32 @@ class OperationalDay:
     employees: tuple[Employee, ...] = ()
     employee_shifts: tuple[EmployeeShift, ...] = ()
     flights: tuple[Flight, ...] = ()
+    fixed_assignments: tuple[FixedAssignment, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class EligibilityAssessment:
+    """Explain whether an employee may legally work one flight."""
+
+    employee_id: str
+    flight: Flight
+    eligible: bool
+    reasons: tuple[EligibilityReason, ...]
+    fixed_to_target: bool = False
+
+    def __post_init__(self) -> None:
+        if self.eligible and self.reasons:
+            raise ValueError("eligible assessments cannot contain failure reasons")
+        if not self.eligible and not self.reasons:
+            raise ValueError("ineligible assessments require at least one reason")
+
+
+@dataclass(frozen=True, slots=True)
+class CandidateAssignment:
+    """One legal, non-fixed employee-flight decision for a future solver."""
+
+    employee_id: str
+    flight: Flight
 
 
 @dataclass(frozen=True, slots=True)

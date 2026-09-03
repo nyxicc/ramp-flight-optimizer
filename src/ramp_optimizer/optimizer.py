@@ -29,7 +29,6 @@ from ramp_optimizer.models import (
 from ramp_optimizer.enums import (
     BreakStatus,
     FlightType,
-    OperationalRole,
     OptimizationStatus,
     Qualification,
     StaffingStatus,
@@ -466,7 +465,7 @@ def _add_break_model(
 ]:
     """Add exact endpoint-derived break indicators without minute indexing."""
 
-    included_employee_indices = _included_ramp_agent_indices(day)
+    included_employee_indices = _included_ordinary_employee_indices(day, config)
     included_employee_set = set(included_employee_indices)
     assignment_values = _assignment_values_by_employee(
         day,
@@ -579,8 +578,11 @@ def _add_break_model(
     )
 
 
-def _included_ramp_agent_indices(day: OperationalDay) -> tuple[int, ...]:
-    """Return enabled employees with at least one ordinary Ramp-Agent shift."""
+def _included_ordinary_employee_indices(
+    day: OperationalDay,
+    config: OptimizerConfig,
+) -> tuple[int, ...]:
+    """Return enabled employees represented by the resolved ordinary role policy."""
 
     return tuple(
         employee_index
@@ -589,7 +591,14 @@ def _included_ramp_agent_indices(day: OperationalDay) -> tuple[int, ...]:
         and any(
             shift.employee_id.strip().casefold()
             == employee.employee_id.strip().casefold()
-            and shift.normalized_role is OperationalRole.RAMP_AGENT
+            and role_is_assignment_eligible(
+                shift.normalized_role,
+                include_leads=False,
+                allow_trainees=config.allow_trainees_for_assignments,
+                allow_possible_ramp_support=(
+                    config.allow_possible_ramp_support_for_assignments
+                ),
+            )
             for shift in day.employee_shifts
         )
     )

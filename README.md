@@ -1,8 +1,7 @@
 # Ramp Team Flight Optimizer
 
 A portfolio project for generating ramp-team flight assignment recommendations
-from synthetic operational data. It is not affiliated with, approved by, or used
-by United Airlines or any other airline.
+from synthetic operational data.
 
 ## Current scope
 

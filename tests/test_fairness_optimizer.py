@@ -153,11 +153,11 @@ def test_fairness_objectives_follow_all_existing_objectives() -> None:
         one_person_config(),
     )
 
-    assert [(item.stage, item.name) for item in result.objective_values[-2:]] == [
+    assert [(item.stage, item.name) for item in result.objective_values[9:11]] == [
         (10, "raw_flight_count_spread"),
         (11, "total_pairwise_flight_count_difference"),
     ]
-    assert len(result.objective_values) == 11
+    assert len(result.objective_values) == 12
 
 
 def test_pairwise_stage_resolves_a_tied_spread_in_the_middle() -> None:
@@ -423,7 +423,7 @@ def test_fixed_only_employee_is_a_fairness_participant() -> None:
     assert result.fairness_metrics.participating_employee_count == 1
     assert result.fairness_metrics.total_assignments == 1
     assert result.fairness_metrics.flight_count_spread == 0
-    assert result.objective_values[-1].value == 0
+    assert result.objective_values[10].value == 0
 
 
 @pytest.mark.parametrize(
@@ -486,8 +486,8 @@ def test_empty_day_has_zero_valued_fairness_metrics() -> None:
     assert result.fairness_metrics.highest_flight_count == 0
     assert result.fairness_metrics.lowest_flight_count == 0
     assert result.fairness_metrics.flight_count_spread == 0
-    assert result.objective_values[-2].value == 0
-    assert result.objective_values[-1].value == 0
+    assert result.objective_values[9].value == 0
+    assert result.objective_values[10].value == 0
 
 
 def test_two_participants_have_exact_public_spread_and_pairwise_values() -> None:
@@ -505,7 +505,7 @@ def test_two_participants_have_exact_public_spread_and_pairwise_values() -> None
     assert result.fairness_metrics.highest_flight_count == 2
     assert result.fairness_metrics.lowest_flight_count == 1
     assert result.fairness_metrics.flight_count_spread == 1
-    assert result.objective_values[-1].value == 1
+    assert result.objective_values[10].value == 1
 
 
 def test_three_participant_extrema_and_pairwise_links_are_exact() -> None:
@@ -537,7 +537,7 @@ def test_three_participant_extrema_and_pairwise_links_are_exact() -> None:
     assert result.fairness_metrics.highest_flight_count == 2
     assert result.fairness_metrics.lowest_flight_count == 0
     assert result.fairness_metrics.flight_count_spread == 2
-    assert result.objective_values[-1].value == 4
+    assert result.objective_values[10].value == 4
     assert solver.value(model_data.highest_flight_count) == 2
     assert solver.value(model_data.lowest_flight_count) == 0
     assert solver.value(model_data.flight_count_spread) == 2

@@ -168,3 +168,5 @@ def test_future_fairness_metrics_can_remain_explicitly_unevaluated() -> None:
 
     assert metrics.maximum_consecutive_streak is None
     assert metrics.adjusted_workload_spread is None
+    assert metrics.total_participating_shift_minutes == 0
+    assert metrics.total_shift_adjusted_deviation == 0.0

@@ -202,6 +202,9 @@ class EmployeeScheduleResult:
     longest_consecutive_streak: int | None
     break_status: BreakStatus
     adjusted_workload: float | None
+    scheduled_shift_minutes: int | None = None
+    proportional_target_flight_count: float | None = None
+    shift_adjusted_deviation: float | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -216,6 +219,8 @@ class FairnessMetrics:
     flight_count_spread: int
     maximum_consecutive_streak: int | None
     adjusted_workload_spread: float | None
+    total_participating_shift_minutes: int = 0
+    total_shift_adjusted_deviation: float = 0.0
 
 
 @dataclass(frozen=True, slots=True)

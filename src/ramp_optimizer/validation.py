@@ -2,7 +2,7 @@
 
 from collections import defaultdict
 from dataclasses import dataclass
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from math import isfinite
 
 from ramp_optimizer.config import OptimizerConfig, TeamWorkImportConfig
@@ -366,12 +366,28 @@ def validate_operational_day(
                         "INVALID_EMPLOYEE_SHIFT", path, "start must be earlier than end"
                     )
                 )
-            elif (
-                normalized_id is not None
-                and normalized_id in employee_ids
-                and role_valid
-            ):
-                valid_shifts[normalized_id].append((index, shift))
+            else:
+                exact_whole_minutes = (
+                    (shift.end - shift.start) % timedelta(minutes=1)
+                    == timedelta(0)
+                )
+                if not exact_whole_minutes:
+                    issues.append(
+                        ValidationIssue(
+                            "INVALID_EMPLOYEE_SHIFT_MINUTES",
+                            path,
+                            (
+                                "duration must be an exact positive number "
+                                "of whole minutes"
+                            ),
+                        )
+                    )
+                elif (
+                    normalized_id is not None
+                    and normalized_id in employee_ids
+                    and role_valid
+                ):
+                    valid_shifts[normalized_id].append((index, shift))
 
         if not role_valid:
             issues.append(

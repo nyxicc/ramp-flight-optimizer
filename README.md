@@ -5,7 +5,7 @@ from synthetic operational data.
 
 ## Current scope
 
-Milestones 1-7 are implemented. The repository currently provides:
+Milestones 1-8 are implemented. The repository currently provides:
 
 - immutable employee, shift, flight, and result domain models;
 - structured input validation;
@@ -16,10 +16,11 @@ Milestones 1-7 are implemented. The repository currently provides:
 - pure half-open interval overlap behavior;
 - explainable employee-flight eligibility and validated candidate preprocessing;
 - a limited CP-SAT optimizer for staffing, push and close-out qualification
-  coverage, required between-assignment breaks, and raw flight-count fairness.
+  coverage, required between-assignment breaks, raw flight-count fairness, and
+  shift-length adjustment.
 
-Shift-adjusted and weighted workload scoring, streak penalties, continuity, and
-emergency Lead solving are not implemented yet.
+Express and three-person weighted workload scoring, streak penalties,
+continuity, and emergency Lead solving are not implemented yet.
 
 ## Employee and availability model
 
@@ -284,7 +285,7 @@ in stable employee order.
 Minimum staffing, qualification coverage, and break coverage are recoverable
 rather than hard constraints, so a constrained day still returns its best
 partial schedule with critical warnings for every known shortage. The optimizer
-uses eleven sequential integer objective stages:
+uses twelve sequential integer objective stages:
 
 1. Maximize flights reaching minimum staffing.
 2. Maximize minimum-staffed departures and turns covering both qualifications.
@@ -300,6 +301,7 @@ uses eleven sequential integer objective stages:
 10. Minimize the raw flight-count spread among fairness participants.
 11. Minimize the total pairwise absolute flight-count difference among those
     participants.
+12. Minimize total shift-adjusted proportional flight-count deviation.
 
 The exact formulation uses one break stage rather than redundant achieved and
 unsatisfied stages. Minimizing known unsatisfied breaks improves employees with
@@ -331,11 +333,60 @@ unordered employee pairs, which resolves avoidable middle-of-the-distribution
 imbalance without floating-point solver expressions. Zero- and one-participant
 populations both have a zero spread and zero pairwise difference.
 
-Idle time and utilization are not objectives. Fairness cannot add staffing
-beyond the already-fixed preferred outcome, and it never makes an illegal
-assignment. Raw counts are not normalized for shift length or opportunity
-count, and Express flights, three-person crews, duration, direction, heavy
-status, and qualifications carry no fairness weight in this milestone.
+Raw count spread and pairwise difference are not normalized for shift length or
+opportunity count. They remain higher priority than the shift-length refinement
+described below. Express flights, three-person crews, flight duration,
+direction, heavy status, and qualifications carry no fairness weight.
+
+### Shift-length adjustment
+
+Stage 12 uses scheduled shift length only to choose among schedules whose first
+11 objective values are already tied. It never worsens raw count spread or
+pairwise count difference. Thus two employees on eight-hour and four-hour
+shifts still receive `3–3` when six assignments can be divided equally. When
+three assignments require a `2–1` split, the longer-shift employee is preferred
+for the extra assignment when every higher priority is tied.
+
+Scheduled minutes come from full `EmployeeShift.end - EmployeeShift.start`
+differences. Separate allowed shifts are summed without merging them or counting
+the idle gap, and overnight shifts use their true cross-date duration. Ordinary
+`RAMP_AGENT` shifts count; a Lead, non-ramp, or unknown shift does not. Trainee
+and possible-support intervals count only when their existing ordinary-pass
+configuration is enabled. Core validation rejects duplicate or overlapping
+same-employee shifts and durations that are not an exact positive whole number
+of minutes, so schedule rows cannot inflate the total.
+
+For participant `e`, the conceptual reporting target is:
+
+```text
+total participant assignments × employee shift minutes
+────────────────────────────────────────────────────────
+             total participant shift minutes
+```
+
+The target is a comparison, not a quota, and is never rounded for optimization.
+CP-SAT avoids division and floating-point coefficients by minimizing the sum of
+these exact integer absolute deviations:
+
+```text
+abs(
+    flight_count[e] × total participant shift minutes
+    - total participant assignments × employee shift minutes[e]
+)
+```
+
+The total participant assignment count is linked exactly to the existing raw
+count variables. Fixed assignments contribute once to both that total and the
+individual count, and may influence which interchangeable optional work goes to
+a longer shift; they are never removed or discounted. Zero participants, one
+participant, and zero participant assignments all produce zero scaled
+deviation.
+
+Idle time remains cost-free, utilization is not maximized, and stage 12 cannot
+create staffing beyond the already-fixed preferred outcome or make an otherwise
+illegal assignment. There are no shift-imbalance warnings. Shift length is not
+an opportunity normalization: candidate count, flight density, qualifications,
+and nonoverlapping assignment combinations do not change the target.
 
 Each proven optimum is fixed before solving the next stage. Sequential solves
 preserve true priority without arbitrary giant weights, and all stages share
@@ -366,6 +417,10 @@ stable employee order. Each result reports chronologically ordered assignments,
 raw total, Mainline, Express, and three-person-flight counts, plus break status.
 The raw total is the count used by Milestone 7 fairness for employees in its
 population; Mainline, Express, and three-person counts remain descriptive.
+Each ordinary employee result also reports scheduled shift minutes. Fairness
+participants receive their proportional target flight count and human-readable
+absolute actual-versus-target deviation; ordinary employee results outside the
+fairness population use `None` for target and deviation.
 `longest_consecutive_streak` and `adjusted_workload` are explicitly `None`
 because their later milestones have not been implemented. Leads and unrelated
 roles are excluded from ordinary employee results, and emergency Lead
@@ -373,15 +428,16 @@ configuration does not enable a second solver pass.
 
 `OptimizationResult.fairness_metrics` reports the fairness population size,
 total and average assignment counts, highest and lowest counts, and their
-spread. These values are reconstructed from the final assignments. Its
-`maximum_consecutive_streak` and `adjusted_workload_spread` fields remain
-explicitly `None`.
+spread. It also reports total participating shift minutes and the sum of public
+actual-versus-target deviations. These values are reconstructed from final
+assignments and authoritative shifts; the stage-12 objective remains the exact
+cross-multiplied integer representation. Its `maximum_consecutive_streak` and
+`adjusted_workload_spread` fields remain explicitly `None`.
 
 This optimizer is not operationally complete. It does not implement Milestone
-8 shift-length adjustment, Milestone 9 Express and three-person workload
-adjustment, Milestone 10 consecutive-flight penalties, Milestone 11 team
-continuity, Milestone 12 emergency Lead solving, or later reporting and
-integration milestones.
+9 Express and three-person workload adjustment, Milestone 10 consecutive-flight
+penalties, Milestone 11 team continuity, Milestone 12 emergency Lead solving,
+or later reporting, torture-test, benchmark, and polish milestones.
 
 ## TeamWork schedule import
 

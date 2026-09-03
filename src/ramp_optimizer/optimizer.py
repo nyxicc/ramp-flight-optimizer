@@ -1,4 +1,4 @@
-"""Milestone 7 optimizer for operations, breaks, and raw-count fairness."""
+"""Milestone 8 optimizer with raw-count and shift-length fairness."""
 
 from dataclasses import dataclass
 from datetime import datetime, timedelta
@@ -10,7 +10,10 @@ from ortools.sat.python import cp_model
 
 from ramp_optimizer.candidates import build_candidate_assignments
 from ramp_optimizer.config import OptimizerConfig
-from ramp_optimizer.eligibility import eligible_shifts_for_interval
+from ramp_optimizer.eligibility import (
+    eligible_shifts_for_interval,
+    role_is_assignment_eligible,
+)
 from ramp_optimizer.intervals import intervals_overlap
 from ramp_optimizer.models import (
     CandidateAssignment,
@@ -71,6 +74,11 @@ class _ModelData:
     flight_count_spread: cp_model.IntVar
     pairwise_flight_count_differences: tuple[cp_model.IntVar, ...]
     total_pairwise_flight_count_difference: cp_model.IntVar
+    fairness_shift_minutes: tuple[int | None, ...]
+    total_fairness_shift_minutes: int
+    total_fairness_assignment_count: cp_model.IntVar
+    shift_adjusted_deviations: tuple[cp_model.IntVar | None, ...]
+    total_shift_adjusted_deviation: cp_model.IntVar
 
 
 @dataclass(frozen=True, slots=True)
@@ -83,7 +91,7 @@ class _ObjectiveStage:
 def optimize_flight_assignments(
     day: OperationalDay, config: OptimizerConfig | None = None
 ) -> OptimizationResult:
-    """Optimize operations, required breaks, then raw flight-count fairness."""
+    """Optimize operations, breaks, raw counts, then shift-length fairness."""
 
     active_config = config or OptimizerConfig()
     started_at = monotonic()
@@ -324,6 +332,19 @@ def _build_model(
         fixed_employee_indices,
         included_employee_indices,
     )
+    (
+        fairness_shift_minutes,
+        total_fairness_shift_minutes,
+        total_fairness_assignment_count,
+        shift_adjusted_deviations,
+        total_shift_adjusted_deviation,
+    ) = _add_shift_length_adjustment_model(
+        model,
+        day,
+        config,
+        fairness_employee_indices,
+        fairness_flight_counts,
+    )
 
     return _ModelData(
         model=model,
@@ -365,6 +386,11 @@ def _build_model(
         total_pairwise_flight_count_difference=(
             total_pairwise_flight_count_difference
         ),
+        fairness_shift_minutes=fairness_shift_minutes,
+        total_fairness_shift_minutes=total_fairness_shift_minutes,
+        total_fairness_assignment_count=total_fairness_assignment_count,
+        shift_adjusted_deviations=shift_adjusted_deviations,
+        total_shift_adjusted_deviation=total_shift_adjusted_deviation,
     )
 
 
@@ -709,6 +735,134 @@ def _add_fairness_model(
     )
 
 
+def _add_shift_length_adjustment_model(
+    model: cp_model.CpModel,
+    day: OperationalDay,
+    config: OptimizerConfig,
+    fairness_employee_indices: tuple[int, ...],
+    fairness_flight_counts: tuple[cp_model.IntVar | None, ...],
+) -> tuple[
+    tuple[int | None, ...],
+    int,
+    cp_model.IntVar,
+    tuple[cp_model.IntVar | None, ...],
+    cp_model.IntVar,
+]:
+    """Add exact integer deviations from proportional shift-length targets."""
+
+    fairness_employee_set = set(fairness_employee_indices)
+    fairness_shift_minutes: list[int | None] = []
+    for employee_index in range(len(day.employees)):
+        if employee_index not in fairness_employee_set:
+            fairness_shift_minutes.append(None)
+            continue
+        shift_minutes = _scheduled_shift_minutes_for_employee(
+            day,
+            config,
+            employee_index,
+        )
+        assert shift_minutes > 0
+        fairness_shift_minutes.append(shift_minutes)
+
+    total_fairness_shift_minutes = sum(
+        shift_minutes
+        for shift_minutes in fairness_shift_minutes
+        if shift_minutes is not None
+    )
+    maximum_flight_count = len(day.flights)
+    maximum_total_assignment_count = (
+        len(fairness_employee_indices) * maximum_flight_count
+    )
+    total_fairness_assignment_count = model.new_int_var(
+        0,
+        maximum_total_assignment_count,
+        "total_fairness_assignment_count",
+    )
+    participating_flight_counts = [
+        fairness_flight_counts[employee_index]
+        for employee_index in fairness_employee_indices
+    ]
+    assert all(count is not None for count in participating_flight_counts)
+    model.add(
+        total_fairness_assignment_count
+        == sum(
+            count for count in participating_flight_counts if count is not None
+        )
+    )
+
+    shift_adjusted_deviations: list[cp_model.IntVar | None] = []
+    participating_deviations: list[cp_model.IntVar] = []
+    maximum_total_deviation = 0
+    for employee_index, shift_minutes in enumerate(fairness_shift_minutes):
+        if shift_minutes is None:
+            shift_adjusted_deviations.append(None)
+            continue
+        flight_count = fairness_flight_counts[employee_index]
+        assert flight_count is not None
+        maximum_deviation = (
+            maximum_flight_count * total_fairness_shift_minutes
+            + maximum_total_assignment_count * shift_minutes
+        )
+        deviation = model.new_int_var(
+            0,
+            maximum_deviation,
+            f"shift_adjusted_flight_count_deviation_e{employee_index}",
+        )
+        model.add_abs_equality(
+            deviation,
+            flight_count * total_fairness_shift_minutes
+            - total_fairness_assignment_count * shift_minutes,
+        )
+        shift_adjusted_deviations.append(deviation)
+        participating_deviations.append(deviation)
+        maximum_total_deviation += maximum_deviation
+
+    total_shift_adjusted_deviation = model.new_int_var(
+        0,
+        maximum_total_deviation,
+        "total_shift_adjusted_flight_count_deviation",
+    )
+    model.add(
+        total_shift_adjusted_deviation == sum(participating_deviations)
+    )
+    return (
+        tuple(fairness_shift_minutes),
+        total_fairness_shift_minutes,
+        total_fairness_assignment_count,
+        tuple(shift_adjusted_deviations),
+        total_shift_adjusted_deviation,
+    )
+
+
+def _scheduled_shift_minutes_for_employee(
+    day: OperationalDay,
+    config: OptimizerConfig,
+    employee_index: int,
+) -> int:
+    """Sum exact whole minutes for shifts allowed in the ordinary pass."""
+
+    employee_id = day.employees[employee_index].employee_id.strip().casefold()
+    one_minute = timedelta(minutes=1)
+    total_minutes = 0
+    for shift in day.employee_shifts:
+        if shift.employee_id.strip().casefold() != employee_id:
+            continue
+        if not role_is_assignment_eligible(
+            shift.normalized_role,
+            include_leads=False,
+            allow_trainees=config.allow_trainees_for_assignments,
+            allow_possible_ramp_support=(
+                config.allow_possible_ramp_support_for_assignments
+            ),
+        ):
+            continue
+        duration = shift.end - shift.start
+        assert duration > timedelta(0)
+        assert duration % one_minute == timedelta(0)
+        total_minutes += duration // one_minute
+    return total_minutes
+
+
 def _one_eligible_shift_contains_assignment_span(
     employee: Employee,
     day: OperationalDay,
@@ -898,6 +1052,11 @@ def _objective_stages(model_data: _ModelData) -> tuple[_ObjectiveStage, ...]:
             "total_pairwise_flight_count_difference",
             False,
             model_data.total_pairwise_flight_count_difference,
+        ),
+        _ObjectiveStage(
+            "total_shift_adjusted_flight_count_deviation",
+            False,
+            model_data.total_shift_adjusted_deviation,
         ),
     )
 
@@ -1126,6 +1285,54 @@ def _build_result(
             )
         )
 
+    fairness_counts = tuple(
+        sum(
+            employee_index in assigned_employee_indices
+            for assigned_employee_indices in assigned_by_flight
+        )
+        for employee_index in model_data.fairness_employee_indices
+    )
+    total_assignments = sum(fairness_counts)
+    assert (
+        solver.value(model_data.total_fairness_assignment_count)
+        == total_assignments
+    )
+
+    proportional_targets: dict[int, float] = {}
+    public_shift_deviations: dict[int, float] = {}
+    scaled_shift_deviations: list[int] = []
+    total_shift_minutes = model_data.total_fairness_shift_minutes
+    for employee_index, flight_count in zip(
+        model_data.fairness_employee_indices,
+        fairness_counts,
+    ):
+        modeled_count = model_data.fairness_flight_counts[employee_index]
+        shift_minutes = model_data.fairness_shift_minutes[employee_index]
+        modeled_deviation = model_data.shift_adjusted_deviations[employee_index]
+        assert modeled_count is not None
+        assert shift_minutes is not None
+        assert modeled_deviation is not None
+        assert solver.value(modeled_count) == flight_count
+
+        target_numerator = total_assignments * shift_minutes
+        scaled_deviation = abs(
+            flight_count * total_shift_minutes - target_numerator
+        )
+        assert solver.value(modeled_deviation) == scaled_deviation
+        scaled_shift_deviations.append(scaled_deviation)
+        proportional_targets[employee_index] = (
+            target_numerator / total_shift_minutes
+        )
+        public_shift_deviations[employee_index] = (
+            scaled_deviation / total_shift_minutes
+        )
+
+    total_scaled_shift_deviation = sum(scaled_shift_deviations)
+    assert (
+        solver.value(model_data.total_shift_adjusted_deviation)
+        == total_scaled_shift_deviation
+    )
+
     employee_results: list[EmployeeScheduleResult] = []
     for employee_index in model_data.included_employee_indices:
         assigned_flight_indices = tuple(
@@ -1205,23 +1412,19 @@ def _build_result(
                 longest_consecutive_streak=None,
                 break_status=break_status,
                 adjusted_workload=None,
+                scheduled_shift_minutes=_scheduled_shift_minutes_for_employee(
+                    day,
+                    config,
+                    employee_index,
+                ),
+                proportional_target_flight_count=proportional_targets.get(
+                    employee_index
+                ),
+                shift_adjusted_deviation=public_shift_deviations.get(
+                    employee_index
+                ),
             )
         )
-
-    fairness_counts = tuple(
-        sum(
-            employee_index in assigned_employee_indices
-            for assigned_employee_indices in assigned_by_flight
-        )
-        for employee_index in model_data.fairness_employee_indices
-    )
-    for employee_index, flight_count in zip(
-        model_data.fairness_employee_indices,
-        fairness_counts,
-    ):
-        modeled_count = model_data.fairness_flight_counts[employee_index]
-        assert modeled_count is not None
-        assert solver.value(modeled_count) == flight_count
 
     highest_flight_count = max(fairness_counts, default=0)
     lowest_flight_count = min(fairness_counts, default=0)
@@ -1237,7 +1440,6 @@ def _build_result(
         solver.value(model_data.total_pairwise_flight_count_difference)
         == total_pairwise_difference
     )
-    total_assignments = sum(fairness_counts)
     participating_employee_count = len(fairness_counts)
     fairness_metrics = FairnessMetrics(
         participating_employee_count=participating_employee_count,
@@ -1252,6 +1454,12 @@ def _build_result(
         flight_count_spread=flight_count_spread,
         maximum_consecutive_streak=None,
         adjusted_workload_spread=None,
+        total_participating_shift_minutes=total_shift_minutes,
+        total_shift_adjusted_deviation=(
+            total_scaled_shift_deviation / total_shift_minutes
+            if total_shift_minutes
+            else 0.0
+        ),
     )
 
     assert isfinite(runtime)

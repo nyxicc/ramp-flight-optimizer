@@ -462,6 +462,7 @@ def test_objective_reporting_matches_partial_schedule() -> None:
         "partial_crew_individual_qualification_coverage",
         "raw_flight_count_spread",
         "total_pairwise_flight_count_difference",
+        "total_shift_adjusted_flight_count_deviation",
     ]
     assert [objective.value for objective in result.objective_values] == [
         0,
@@ -472,6 +473,7 @@ def test_objective_reporting_matches_partial_schedule() -> None:
         0,
         0,
         2,
+        0,
         0,
         0,
         0,
@@ -551,6 +553,7 @@ def test_empty_day_and_no_employee_day_return_optimal_results() -> None:
     assert empty.status is OptimizationStatus.OPTIMAL
     assert empty.flight_results == ()
     assert [objective.value for objective in empty.objective_values] == [
+        0,
         0,
         0,
         0,

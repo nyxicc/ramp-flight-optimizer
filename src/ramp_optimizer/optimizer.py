@@ -1,4 +1,4 @@
-"""Milestone 4 CP-SAT optimizer for minimum and preferred flight staffing."""
+"""Milestone 5 CP-SAT optimizer for staffing and qualification coverage."""
 
 from dataclasses import dataclass
 from itertools import combinations
@@ -19,7 +19,9 @@ from ramp_optimizer.models import (
     ScheduleWarning,
 )
 from ramp_optimizer.enums import (
+    FlightType,
     OptimizationStatus,
+    Qualification,
     StaffingStatus,
     WarningCode,
     WarningSeverity,
@@ -41,6 +43,12 @@ class _ModelData:
     preferred_met: tuple[cp_model.IntVar, ...]
     preferred_shortfalls: tuple[cp_model.IntVar, ...]
     largest_minimum_shortfall: cp_model.IntVar
+    push_covered: tuple[cp_model.IntVar | None, ...]
+    close_covered: tuple[cp_model.IntVar | None, ...]
+    qualification_compliant: tuple[cp_model.IntVar | None, ...]
+    minimum_staffed_qualification_compliant: tuple[cp_model.IntVar, ...]
+    minimum_staffed_qualification_coverage: tuple[cp_model.IntVar, ...]
+    partial_crew_qualification_coverage: tuple[cp_model.IntVar, ...]
 
 
 @dataclass(frozen=True, slots=True)
@@ -50,10 +58,10 @@ class _ObjectiveStage:
     expression: cp_model.LinearExpr | int
 
 
-def optimize_minimum_staffing(
+def optimize_flight_assignments(
     day: OperationalDay, config: OptimizerConfig | None = None
 ) -> OptimizationResult:
-    """Optimize only minimum and preferred staffing under Milestone 4 rules."""
+    """Optimize staffing first, then crew qualification coverage."""
 
     active_config = config or OptimizerConfig()
     started_at = monotonic()
@@ -74,6 +82,14 @@ def optimize_minimum_staffing(
     if solver is None:
         return _empty_solver_result(status, objectives, runtime)
     return _build_result(day, model_data, solver, status, objectives, runtime)
+
+
+def optimize_minimum_staffing(
+    day: OperationalDay, config: OptimizerConfig | None = None
+) -> OptimizationResult:
+    """Backward-compatible alias for :func:`optimize_flight_assignments`."""
+
+    return optimize_flight_assignments(day, config)
 
 
 def _build_model(
@@ -104,6 +120,12 @@ def _build_model(
     minimum_shortfalls: list[cp_model.IntVar] = []
     preferred_met: list[cp_model.IntVar] = []
     preferred_shortfalls: list[cp_model.IntVar] = []
+    push_covered: list[cp_model.IntVar | None] = []
+    close_covered: list[cp_model.IntVar | None] = []
+    qualification_compliant: list[cp_model.IntVar | None] = []
+    minimum_staffed_qualification_compliant: list[cp_model.IntVar] = []
+    minimum_staffed_qualification_coverage: list[cp_model.IntVar] = []
+    partial_crew_qualification_coverage: list[cp_model.IntVar] = []
 
     for flight_index, requirement in enumerate(requirements):
         fixed_count = len(fixed_employee_indices[flight_index])
@@ -158,6 +180,78 @@ def _build_model(
         preferred_met.append(preferred_indicator)
         preferred_shortfalls.append(preferred_shortfall)
 
+        if facts[flight_index].flight_type is FlightType.ARRIVAL_ONLY:
+            push_covered.append(None)
+            close_covered.append(None)
+            qualification_compliant.append(None)
+            continue
+
+        push_indicator = _add_exact_qualification_indicator(
+            model,
+            day,
+            decisions,
+            fixed_employee_indices[flight_index],
+            flight_index,
+            Qualification.PUSH,
+            f"push_covered_f{flight_index}",
+        )
+        close_indicator = _add_exact_qualification_indicator(
+            model,
+            day,
+            decisions,
+            fixed_employee_indices[flight_index],
+            flight_index,
+            Qualification.CLOSE_OUT,
+            f"close_covered_f{flight_index}",
+        )
+        compliant_indicator = _add_exact_and_indicator(
+            model,
+            push_indicator,
+            close_indicator,
+            f"qualification_compliant_f{flight_index}",
+        )
+        push_covered.append(push_indicator)
+        close_covered.append(close_indicator)
+        qualification_compliant.append(compliant_indicator)
+
+        minimum_compliant = _add_exact_and_indicator(
+            model,
+            minimum_indicator,
+            compliant_indicator,
+            f"minimum_staffed_qualification_compliant_f{flight_index}",
+        )
+        minimum_push = _add_exact_and_indicator(
+            model,
+            minimum_indicator,
+            push_indicator,
+            f"minimum_staffed_push_covered_f{flight_index}",
+        )
+        minimum_close = _add_exact_and_indicator(
+            model,
+            minimum_indicator,
+            close_indicator,
+            f"minimum_staffed_close_covered_f{flight_index}",
+        )
+        partial_push = _add_exact_below_minimum_coverage_indicator(
+            model,
+            minimum_indicator,
+            push_indicator,
+            f"partial_crew_push_covered_f{flight_index}",
+        )
+        partial_close = _add_exact_below_minimum_coverage_indicator(
+            model,
+            minimum_indicator,
+            close_indicator,
+            f"partial_crew_close_covered_f{flight_index}",
+        )
+        minimum_staffed_qualification_compliant.append(minimum_compliant)
+        minimum_staffed_qualification_coverage.extend(
+            (minimum_push, minimum_close)
+        )
+        partial_crew_qualification_coverage.extend(
+            (partial_push, partial_close)
+        )
+
     largest_shortfall_bound = max(
         (requirement.minimum for requirement in requirements), default=0
     )
@@ -183,6 +277,18 @@ def _build_model(
         preferred_met=tuple(preferred_met),
         preferred_shortfalls=tuple(preferred_shortfalls),
         largest_minimum_shortfall=largest_minimum_shortfall,
+        push_covered=tuple(push_covered),
+        close_covered=tuple(close_covered),
+        qualification_compliant=tuple(qualification_compliant),
+        minimum_staffed_qualification_compliant=tuple(
+            minimum_staffed_qualification_compliant
+        ),
+        minimum_staffed_qualification_coverage=tuple(
+            minimum_staffed_qualification_coverage
+        ),
+        partial_crew_qualification_coverage=tuple(
+            partial_crew_qualification_coverage
+        ),
     )
 
 
@@ -254,10 +360,78 @@ def _add_exact_threshold_indicator(
     return indicator
 
 
+def _add_exact_qualification_indicator(
+    model: cp_model.CpModel,
+    day: OperationalDay,
+    decisions: dict[tuple[int, int], cp_model.IntVar],
+    fixed_employee_indices: tuple[int, ...],
+    flight_index: int,
+    qualification: Qualification,
+    name: str,
+) -> cp_model.IntVar:
+    """Link coverage exactly to qualified members of the assigned crew."""
+
+    fixed_qualified_count = sum(
+        qualification in day.employees[index].qualifications
+        for index in fixed_employee_indices
+    )
+    qualified_decisions = [
+        decision
+        for (employee_index, candidate_flight_index), decision in decisions.items()
+        if candidate_flight_index == flight_index
+        and qualification in day.employees[employee_index].qualifications
+    ]
+    qualified_assigned_count = fixed_qualified_count + sum(qualified_decisions)
+    indicator = model.new_bool_var(name)
+    model.add(qualified_assigned_count >= 1).only_enforce_if(indicator)
+    model.add(qualified_assigned_count == 0).only_enforce_if(indicator.Not())
+    return indicator
+
+
+def _add_exact_and_indicator(
+    model: cp_model.CpModel,
+    left: cp_model.IntVar,
+    right: cp_model.IntVar,
+    name: str,
+) -> cp_model.IntVar:
+    """Return a Boolean equal to the conjunction of two Boolean variables."""
+
+    indicator = model.new_bool_var(name)
+    model.add(indicator <= left)
+    model.add(indicator <= right)
+    model.add(indicator >= left + right - 1)
+    return indicator
+
+
+def _add_exact_below_minimum_coverage_indicator(
+    model: cp_model.CpModel,
+    minimum_met: cp_model.IntVar,
+    coverage: cp_model.IntVar,
+    name: str,
+) -> cp_model.IntVar:
+    """Return a Boolean equal to coverage AND NOT minimum staffing."""
+
+    indicator = model.new_bool_var(name)
+    model.add(indicator <= coverage)
+    model.add(indicator + minimum_met <= 1)
+    model.add(indicator >= coverage - minimum_met)
+    return indicator
+
+
 def _objective_stages(model_data: _ModelData) -> tuple[_ObjectiveStage, ...]:
     return (
         _ObjectiveStage(
             "minimum_covered_flights", True, sum(model_data.minimum_met)
+        ),
+        _ObjectiveStage(
+            "minimum_staffed_qualification_compliant_flights",
+            True,
+            sum(model_data.minimum_staffed_qualification_compliant),
+        ),
+        _ObjectiveStage(
+            "minimum_staffed_individual_qualification_coverage",
+            True,
+            sum(model_data.minimum_staffed_qualification_coverage),
         ),
         _ObjectiveStage(
             "total_minimum_shortfall",
@@ -276,6 +450,11 @@ def _objective_stages(model_data: _ModelData) -> tuple[_ObjectiveStage, ...]:
             "total_preferred_shortfall",
             False,
             sum(model_data.preferred_shortfalls),
+        ),
+        _ObjectiveStage(
+            "partial_crew_individual_qualification_coverage",
+            True,
+            sum(model_data.partial_crew_qualification_coverage),
         ),
     )
 
@@ -339,6 +518,16 @@ def _solve_lexicographically(
                 )
             )
             return status, solver, tuple(recorded)
+        if status is OptimizationStatus.UNKNOWN and last_solver is not None:
+            recorded.append(
+                ObjectiveValue(
+                    stage_number,
+                    stage.name,
+                    _expression_value(last_solver, stage.expression),
+                    False,
+                )
+            )
+            return OptimizationStatus.FEASIBLE, last_solver, tuple(recorded)
         return status, None, tuple(recorded)
 
     return OptimizationStatus.OPTIMAL, last_solver, tuple(recorded)
@@ -407,7 +596,7 @@ def _build_result(
             else StaffingStatus.BELOW_MINIMUM
         )
 
-        flight_warnings: tuple[ScheduleWarning, ...] = ()
+        flight_warnings: list[ScheduleWarning] = []
         if not minimum_met:
             warning = ScheduleWarning(
                 code=WarningCode.MINIMUM_STAFFING_NOT_MET,
@@ -418,8 +607,45 @@ def _build_result(
                 arrival_flight_number=flight.arrival_flight_number,
                 departure_flight_number=flight.departure_flight_number,
             )
-            flight_warnings = (warning,)
+            flight_warnings.append(warning)
             all_warnings.append(warning)
+
+        if facts.flight_type is FlightType.ARRIVAL_ONLY:
+            push_covered = None
+            close_covered = None
+        else:
+            assigned_employees = (
+                day.employees[index] for index in sorted(assigned_indices)
+            )
+            assigned_qualifications = frozenset(
+                qualification
+                for employee in assigned_employees
+                for qualification in employee.qualifications
+            )
+            push_covered = Qualification.PUSH in assigned_qualifications
+            close_covered = Qualification.CLOSE_OUT in assigned_qualifications
+            if not push_covered:
+                warning = ScheduleWarning(
+                    code=WarningCode.PUSH_QUALIFICATION_NOT_MET,
+                    severity=WarningSeverity.CRITICAL,
+                    message="Assigned crew does not include a push-qualified employee",
+                    arrival_flight_number=flight.arrival_flight_number,
+                    departure_flight_number=flight.departure_flight_number,
+                )
+                flight_warnings.append(warning)
+                all_warnings.append(warning)
+            if not close_covered:
+                warning = ScheduleWarning(
+                    code=WarningCode.CLOSE_QUALIFICATION_NOT_MET,
+                    severity=WarningSeverity.CRITICAL,
+                    message=(
+                        "Assigned crew does not include a close-out-qualified employee"
+                    ),
+                    arrival_flight_number=flight.arrival_flight_number,
+                    departure_flight_number=flight.departure_flight_number,
+                )
+                flight_warnings.append(warning)
+                all_warnings.append(warning)
 
         flight_results.append(
             FlightAssignmentResult(
@@ -440,9 +666,9 @@ def _build_result(
                 preferred_shortfall=preferred_shortfall,
                 express=facts.express,
                 heavy=flight.heavy,
-                push_covered=None,
-                close_covered=None,
-                warnings=flight_warnings,
+                push_covered=push_covered,
+                close_covered=close_covered,
+                warnings=tuple(flight_warnings),
             )
         )
 

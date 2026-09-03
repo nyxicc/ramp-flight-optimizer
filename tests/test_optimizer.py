@@ -19,6 +19,7 @@ from ramp_optimizer import (
     OptimizerConfig,
     Qualification,
     StaffingStatus,
+    WarningCode,
     optimize_minimum_staffing,
 )
 
@@ -141,7 +142,10 @@ def test_minimum_staffing_is_recoverable(
         if minimum_met
         else StaffingStatus.BELOW_MINIMUM
     )
-    assert bool(flight_result.warnings) is (not minimum_met)
+    warning_codes = {warning.code for warning in flight_result.warnings}
+    assert (WarningCode.MINIMUM_STAFFING_NOT_MET in warning_codes) is (
+        not minimum_met
+    )
 
 
 @pytest.mark.parametrize(
@@ -164,8 +168,8 @@ def test_largest_shortfall_stage_avoids_concentrating_tied_shortages() -> None:
     result = optimize_minimum_staffing(staffed_day(flights, 5))
 
     assert sorted(counts(result)) == [1, 1, 3]
-    assert result.objective_values[2].name == "largest_minimum_shortfall"
-    assert result.objective_values[2].value == 2
+    assert result.objective_values[4].name == "largest_minimum_shortfall"
+    assert result.objective_values[4].value == 2
 
 
 @pytest.mark.parametrize(
@@ -448,12 +452,24 @@ def test_objective_reporting_matches_partial_schedule() -> None:
 
     assert [objective.name for objective in result.objective_values] == [
         "minimum_covered_flights",
+        "minimum_staffed_qualification_compliant_flights",
+        "minimum_staffed_individual_qualification_coverage",
         "total_minimum_shortfall",
         "largest_minimum_shortfall",
         "preferred_staffed_flights",
         "total_preferred_shortfall",
+        "partial_crew_individual_qualification_coverage",
     ]
-    assert [objective.value for objective in result.objective_values] == [0, 1, 1, 0, 2]
+    assert [objective.value for objective in result.objective_values] == [
+        0,
+        0,
+        0,
+        1,
+        1,
+        0,
+        2,
+        0,
+    ]
     assert all(objective.proven_optimal for objective in result.objective_values)
     assert result.status is OptimizationStatus.OPTIMAL
     assert isfinite(result.solver_runtime_seconds)
@@ -496,8 +512,8 @@ def test_result_preserves_order_facts_and_marks_future_metrics_unevaluated() -> 
     assert first_result.express
     assert first_result.heavy
     assert first_result.flight.gate == "B4"
-    assert first_result.push_covered is None
-    assert first_result.close_covered is None
+    assert first_result.push_covered is True
+    assert first_result.close_covered is False
     assert result.employee_results == ()
     assert result.fairness_metrics is None
     assert result.attempts == ()
@@ -513,7 +529,16 @@ def test_empty_day_and_no_employee_day_return_optimal_results() -> None:
 
     assert empty.status is OptimizationStatus.OPTIMAL
     assert empty.flight_results == ()
-    assert [objective.value for objective in empty.objective_values] == [0, 0, 0, 0, 0]
+    assert [objective.value for objective in empty.objective_values] == [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+    ]
     assert no_employees.status is OptimizationStatus.OPTIMAL
     assert no_employees.flight_results[0].minimum_shortfall == 3
 

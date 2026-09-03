@@ -5,7 +5,7 @@ from synthetic operational data.
 
 ## Current scope
 
-The repository currently provides:
+Milestones 1-5 are implemented. The repository currently provides:
 
 - immutable employee, shift, flight, and result domain models;
 - structured input validation;
@@ -15,10 +15,11 @@ The repository currently provides:
   derivation;
 - pure half-open interval overlap behavior;
 - explainable employee-flight eligibility and validated candidate preprocessing;
-- a limited CP-SAT optimizer for minimum and preferred staffing.
+- a limited CP-SAT optimizer for minimum and preferred staffing plus push and
+  close-out qualification coverage.
 
-Qualification coverage, breaks, fairness, workload scoring, continuity, and
-emergency Lead solving are not implemented yet.
+Breaks, fairness, workload scoring, continuity, and emergency Lead solving are
+not implemented yet.
 
 ## Employee and availability model
 
@@ -168,8 +169,10 @@ eligibility default to their `OptimizerConfig` settings and may be overridden
 explicitly per call. Leads require the independent `include_leads=True` pass;
 the emergency-Lead configuration does not enable them automatically. Non-ramp
 and unknown roles remain excluded. Source position text is not consulted.
-`PUSH` and `CLOSE_OUT` qualifications also do not filter generic eligibility:
-they will later be used to evaluate coverage by an assigned team.
+`PUSH` and `CLOSE_OUT` qualifications also do not filter generic eligibility.
+They are separate crew-level requirements for departures and turns, while an
+unqualified employee remains a legal candidate whenever the ordinary
+eligibility checks pass.
 
 Shift containment is inclusive at both availability boundaries: a flight may
 begin exactly at shift start or end exactly at shift end. Separate shifts are
@@ -185,8 +188,9 @@ employee eligibility.
 `build_candidate_assignments()` validates the complete day and configuration,
 then returns only eligible, non-fixed employee-flight pairs in stable employee
 order followed by flight order. This preprocessing makes illegal assignments
-unrepresentable to the future solver. It does not construct a solver, choose
-assignments, enforce qualification coverage, or optimize staffing and fairness.
+unrepresentable to the solver. It does not construct a solver, choose
+assignments, enforce crew-level qualification coverage, or optimize staffing
+and fairness.
 
 ## Staffing configuration
 
@@ -219,13 +223,15 @@ assert normal.maximum == 4
 assert heavy.maximum == 5
 ```
 
-## Minimum staffing optimizer
+## Staffing and qualification optimizer
 
-`optimize_minimum_staffing()` is the first limited CP-SAT scheduling entry
-point. It creates `x[employee, flight]` Boolean variables only for eligible,
-non-fixed candidate pairs. Disabled, unavailable, role-ineligible,
+`optimize_flight_assignments()` is the primary limited CP-SAT scheduling entry
+point. `optimize_minimum_staffing()` remains available as a backward-compatible
+alias. The optimizer creates `x[employee, flight]` Boolean variables only for
+eligible, non-fixed candidate pairs. Disabled, unavailable, role-ineligible,
 fixed-conflicting, and already-fixed pairs therefore have no decision variable.
-Fixed assignments are constants that always contribute to their flight's crew.
+Fixed assignments are constants that always contribute to their flight's crew
+and qualification coverage.
 
 The hard constraints prevent one employee from working overlapping half-open
 flight windows and cap each flight at the maximum returned by
@@ -233,39 +239,59 @@ flight windows and cap each flight at the maximum returned by
 validation before model construction. No transition time or gate-distance rule
 is applied.
 
-Minimum staffing is recoverable rather than mandatory, so a constrained day
-still returns its best partial schedule. The optimizer uses five sequential
-integer objective stages:
+Departures and turns each require at least one push-qualified employee and at
+least one close-out-qualified employee. One dual-qualified employee may cover
+both requirements. Arrival-only flights require neither qualification and
+report both coverage fields as `None`. Coverage is derived only from the
+authoritative `Employee.qualifications` collection; names, source positions,
+normalized roles, flight numbers, and fixed status never grant qualifications.
+
+Minimum staffing and qualification coverage are recoverable rather than hard
+constraints, so a constrained day still returns its best partial schedule with
+critical warnings for every known shortage. The optimizer uses eight
+sequential integer objective stages:
 
 1. Maximize flights reaching minimum staffing.
-2. Minimize total minimum-staffing shortfall.
-3. Minimize the largest individual minimum shortfall.
-4. Maximize flights reaching preferred staffing.
-5. Minimize total preferred-staffing shortfall.
+2. Maximize minimum-staffed departures and turns covering both qualifications.
+3. Maximize separate push and close-out coverage on minimum-staffed departures
+   and turns.
+4. Minimize total minimum-staffing shortfall.
+5. Minimize the largest individual minimum shortfall.
+6. Maximize flights reaching preferred staffing.
+7. Minimize total preferred-staffing shortfall.
+8. Maximize separate qualification coverage on below-minimum partial crews as
+   a final tie-breaker.
 
 Each proven optimum is fixed before solving the next stage. Sequential solves
 preserve true priority without arbitrary giant weights, and all stages share
-one total time budget. For two simultaneous flights and five available
-employees, the result is `3 + 2`: one flight reaches the three-person minimum,
-then the remaining two employees reduce total shortage on the other flight.
-Such a partial schedule can still be mathematically `OPTIMAL`.
+one total time budget. Qualification stages therefore cannot reduce the maximum
+achievable number of minimum-staffed flights, and qualified fragments cannot
+outrank operationally viable crews. For two simultaneous flights and five
+available employees, the result remains `3 + 2`: one flight reaches the
+three-person minimum, then the remaining two employees reduce total shortage
+on the other flight. Such a partial schedule can still be mathematically
+`OPTIMAL`. If a later objective times out or returns `UNKNOWN`, the last known
+feasible schedule is retained and returned with non-optimal objective metadata.
 
 ```python
-from ramp_optimizer import optimize_minimum_staffing
+from ramp_optimizer import optimize_flight_assignments
 
-result = optimize_minimum_staffing(day, OptimizerConfig())
+result = optimize_flight_assignments(day, OptimizerConfig())
 ```
 
 Results include stable assigned and fixed employee IDs, staffing limits and
-shortfalls, flight timing and classification, objective values with proof
-status, warnings for known below-minimum flights, and runtime. Qualification
-coverage is `None`, fairness is `None`, and employee break/workload results are
-empty because those stages have not been evaluated. Leads are excluded from
-this ordinary optimizer even when emergency Lead staffing is configured.
+shortfalls, flight timing and classification, qualification coverage, objective
+values with proof status, warnings for known staffing and qualification
+shortages, and runtime. Qualification warnings use the structured
+`PUSH_QUALIFICATION_NOT_MET` and `CLOSE_QUALIFICATION_NOT_MET` codes and coexist
+with minimum-staffing warnings. Fairness is `None`, and employee break/workload
+results are empty because those stages have not been evaluated. Leads are
+excluded from this ordinary optimizer even when emergency Lead staffing is
+configured.
 
-This optimizer is not operationally complete: it does not evaluate push or
-close-out coverage, breaks, fairness, workload, streaks, team continuity, or an
-emergency Lead second pass.
+This optimizer is not operationally complete: it does not evaluate breaks,
+fairness, workload, streaks, team continuity, or an emergency Lead second pass.
+Those capabilities remain for Milestone 6 and later.
 
 ## TeamWork schedule import
 

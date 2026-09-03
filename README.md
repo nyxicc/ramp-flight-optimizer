@@ -5,7 +5,7 @@ from synthetic operational data.
 
 ## Current scope
 
-Milestones 1-5 are implemented. The repository currently provides:
+Milestones 1-6 are implemented. The repository currently provides:
 
 - immutable employee, shift, flight, and result domain models;
 - structured input validation;
@@ -15,11 +15,11 @@ Milestones 1-5 are implemented. The repository currently provides:
   derivation;
 - pure half-open interval overlap behavior;
 - explainable employee-flight eligibility and validated candidate preprocessing;
-- a limited CP-SAT optimizer for minimum and preferred staffing plus push and
-  close-out qualification coverage.
+- a limited CP-SAT optimizer for staffing, push and close-out qualification
+  coverage, and required between-assignment breaks.
 
-Breaks, fairness, workload scoring, continuity, and emergency Lead solving are
-not implemented yet.
+Fairness, workload scoring, streak penalties, continuity, and emergency Lead
+solving are not implemented yet.
 
 ## Employee and availability model
 
@@ -52,7 +52,7 @@ schedule position text never grants a qualification.
 The core shift contains no spreadsheet provenance. TeamWork source row,
 original position text, note presence, and SwapBoard state live in immutable
 `ShiftImportRecord` objects. `ScheduleImportResult.shifts` exposes only the core
-shift values needed by eligibility and the future optimizer.
+shift values needed by eligibility and the optimizer.
 
 ## Flight movements and derived operational facts
 
@@ -223,7 +223,7 @@ assert normal.maximum == 4
 assert heavy.maximum == 5
 ```
 
-## Staffing and qualification optimizer
+## Staffing, qualification, and break optimizer
 
 `optimize_flight_assignments()` is the primary limited CP-SAT scheduling entry
 point. `optimize_minimum_staffing()` remains available as a backward-compatible
@@ -246,10 +246,45 @@ report both coverage fields as `None`. Coverage is derived only from the
 authoritative `Employee.qualifications` collection; names, source positions,
 normalized roles, flight numbers, and fixed status never grant qualifications.
 
-Minimum staffing and qualification coverage are recoverable rather than hard
-constraints, so a constrained day still returns its best partial schedule with
-critical warnings for every known shortage. The optimizer uses eight
-sequential integer objective stages:
+### Required breaks
+
+Each included Ramp Agent should receive an uninterrupted, flight-free gap of at
+least `OptimizerConfig.required_break_minutes`, which defaults to 30 minutes.
+Only a gap between two consecutive final assignments counts. Time before the
+first assignment and after the last assignment never counts.
+
+For chronological half-open assignments `[work_start_A, work_end_A)` and
+`[work_start_B, work_end_B)`, the gap is `work_start_B - work_end_A`. A flight
+ending at 09:00 followed by one starting at 09:30 satisfies the default rule;
+09:29 or 09:00 does not. Full `datetime` arithmetic applies across midnight.
+
+The bounding assignments must fit within one individual eligible shift. Gaps
+between separate shifts are never combined. When an employee has assignments
+in multiple shifts, a qualifying gap within any one continuous shift satisfies
+the daily requirement. Fixed assignments are evaluated exactly like selected
+assignments, and an intervening fixed or selected flight splits the surrounding
+idle period into the actual consecutive gaps.
+
+Employee break results use these statuses:
+
+- `NOT_EVALUABLE_BETWEEN_ASSIGNMENTS`: the included Ramp Agent has fewer than
+  two final assignments;
+- `SATISFIED`: at least one qualifying consecutive gap exists;
+- `UNSATISFIED`: at least two assignments exist but no qualifying gap does;
+- `NOT_APPLICABLE`: reserved for employees outside the ordinary Ramp-Agent
+  population, for whom this optimizer does not create employee results.
+
+An unsatisfied break is recoverable and produces one critical employee-level
+`REQUIRED_BREAK_NOT_MET` warning. It never makes the operational day infeasible.
+Flight warnings remain first in stable flight order, followed by break warnings
+in stable employee order.
+
+### Objective hierarchy
+
+Minimum staffing, qualification coverage, and break coverage are recoverable
+rather than hard constraints, so a constrained day still returns its best
+partial schedule with critical warnings for every known shortage. The optimizer
+uses nine sequential integer objective stages:
 
 1. Maximize flights reaching minimum staffing.
 2. Maximize minimum-staffed departures and turns covering both qualifications.
@@ -257,10 +292,18 @@ sequential integer objective stages:
    and turns.
 4. Minimize total minimum-staffing shortfall.
 5. Minimize the largest individual minimum shortfall.
-6. Maximize flights reaching preferred staffing.
-7. Minimize total preferred-staffing shortfall.
-8. Maximize separate qualification coverage on below-minimum partial crews as
+6. Minimize known unsatisfied required breaks among included Ramp Agents.
+7. Maximize flights reaching preferred staffing.
+8. Minimize total preferred-staffing shortfall.
+9. Maximize separate qualification coverage on below-minimum partial crews as
    a final tie-breaker.
+
+The exact formulation uses one break stage rather than redundant achieved and
+unsatisfied stages. Minimizing known unsatisfied breaks improves employees with
+two or more assignments without rewarding extra flights merely to convert a
+non-evaluable employee into a satisfied one. Break optimization occurs after
+all minimum-staffing and high-priority qualification outcomes are fixed, but
+before preferred staffing.
 
 Each proven optimum is fixed before solving the next stage. Sequential solves
 preserve true priority without arbitrary giant weights, and all stages share
@@ -281,17 +324,24 @@ result = optimize_flight_assignments(day, OptimizerConfig())
 
 Results include stable assigned and fixed employee IDs, staffing limits and
 shortfalls, flight timing and classification, qualification coverage, objective
-values with proof status, warnings for known staffing and qualification
+values with proof status, warnings for known staffing, qualification, and break
 shortages, and runtime. Qualification warnings use the structured
 `PUSH_QUALIFICATION_NOT_MET` and `CLOSE_QUALIFICATION_NOT_MET` codes and coexist
-with minimum-staffing warnings. Fairness is `None`, and employee break/workload
-results are empty because those stages have not been evaluated. Leads are
-excluded from this ordinary optimizer even when emergency Lead staffing is
-configured.
+with minimum-staffing and employee break warnings.
 
-This optimizer is not operationally complete: it does not evaluate breaks,
-fairness, workload, streaks, team continuity, or an emergency Lead second pass.
-Those capabilities remain for Milestone 6 and later.
+`OptimizationResult.employee_results` contains ordinary enabled Ramp Agents in
+stable employee order. Each result reports chronologically ordered assignments,
+raw total, Mainline, Express, and three-person-flight counts, plus break status.
+These counts are descriptive and are not fairness or workload objectives.
+`longest_consecutive_streak` and `adjusted_workload` are explicitly `None`
+because their later milestones have not been implemented. Fairness remains
+`None`. Leads and unrelated roles are excluded from ordinary employee results,
+and emergency Lead configuration does not enable a second solver pass.
+
+This optimizer is not operationally complete: it does not evaluate fairness,
+shift-length targets, workload weighting, streaks or streak penalties, team
+continuity, or an emergency Lead second pass. Those capabilities remain for
+Milestone 7 and later.
 
 ## TeamWork schedule import
 

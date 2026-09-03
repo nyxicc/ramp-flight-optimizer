@@ -1,6 +1,7 @@
-"""Milestone 5 CP-SAT optimizer for staffing and qualification coverage."""
+"""Milestone 6 CP-SAT optimizer for staffing, qualifications, and breaks."""
 
 from dataclasses import dataclass
+from datetime import datetime, timedelta
 from itertools import combinations
 from math import isfinite
 from time import monotonic
@@ -9,9 +10,12 @@ from ortools.sat.python import cp_model
 
 from ramp_optimizer.candidates import build_candidate_assignments
 from ramp_optimizer.config import OptimizerConfig
+from ramp_optimizer.eligibility import eligible_shifts_for_interval
 from ramp_optimizer.intervals import intervals_overlap
 from ramp_optimizer.models import (
     CandidateAssignment,
+    Employee,
+    EmployeeScheduleResult,
     FlightAssignmentResult,
     ObjectiveValue,
     OperationalDay,
@@ -19,7 +23,9 @@ from ramp_optimizer.models import (
     ScheduleWarning,
 )
 from ramp_optimizer.enums import (
+    BreakStatus,
     FlightType,
+    OperationalRole,
     OptimizationStatus,
     Qualification,
     StaffingStatus,
@@ -27,7 +33,10 @@ from ramp_optimizer.enums import (
     WarningSeverity,
 )
 from ramp_optimizer.staffing import StaffingRequirements, staffing_requirements_for
-from ramp_optimizer.timing import FlightOperationalFacts, derive_flight_operational_facts
+from ramp_optimizer.timing import (
+    FlightOperationalFacts,
+    derive_flight_operational_facts,
+)
 
 
 @dataclass(slots=True)
@@ -49,6 +58,11 @@ class _ModelData:
     minimum_staffed_qualification_compliant: tuple[cp_model.IntVar, ...]
     minimum_staffed_qualification_coverage: tuple[cp_model.IntVar, ...]
     partial_crew_qualification_coverage: tuple[cp_model.IntVar, ...]
+    included_employee_indices: tuple[int, ...]
+    break_evaluable: tuple[cp_model.IntVar | None, ...]
+    break_achieved: tuple[cp_model.IntVar | None, ...]
+    known_unsatisfied_break: tuple[cp_model.IntVar | None, ...]
+    break_gap_variables: dict[tuple[int, int, int], cp_model.IntVar]
 
 
 @dataclass(frozen=True, slots=True)
@@ -61,7 +75,7 @@ class _ObjectiveStage:
 def optimize_flight_assignments(
     day: OperationalDay, config: OptimizerConfig | None = None
 ) -> OptimizationResult:
-    """Optimize staffing first, then crew qualification coverage."""
+    """Optimize staffing, crew qualifications, and required breaks."""
 
     active_config = config or OptimizerConfig()
     started_at = monotonic()
@@ -81,7 +95,15 @@ def optimize_flight_assignments(
 
     if solver is None:
         return _empty_solver_result(status, objectives, runtime)
-    return _build_result(day, model_data, solver, status, objectives, runtime)
+    return _build_result(
+        day,
+        active_config,
+        model_data,
+        solver,
+        status,
+        objectives,
+        runtime,
+    )
 
 
 def optimize_minimum_staffing(
@@ -265,6 +287,21 @@ def _build_model(
     else:
         model.add(largest_minimum_shortfall == 0)
 
+    (
+        included_employee_indices,
+        break_evaluable,
+        break_achieved,
+        known_unsatisfied_break,
+        break_gap_variables,
+    ) = _add_break_model(
+        model,
+        day,
+        config,
+        decisions,
+        fixed_employee_indices,
+        facts,
+    )
+
     return _ModelData(
         model=model,
         decisions=decisions,
@@ -289,6 +326,11 @@ def _build_model(
         partial_crew_qualification_coverage=tuple(
             partial_crew_qualification_coverage
         ),
+        included_employee_indices=included_employee_indices,
+        break_evaluable=break_evaluable,
+        break_achieved=break_achieved,
+        known_unsatisfied_break=known_unsatisfied_break,
+        break_gap_variables=break_gap_variables,
     )
 
 
@@ -346,6 +388,226 @@ def _add_candidate_overlap_constraints(
                     + decisions[(employee_index, second_flight)]
                     <= 1
                 )
+
+
+def _add_break_model(
+    model: cp_model.CpModel,
+    day: OperationalDay,
+    config: OptimizerConfig,
+    decisions: dict[tuple[int, int], cp_model.IntVar],
+    fixed_employee_indices: tuple[tuple[int, ...], ...],
+    facts: tuple[FlightOperationalFacts, ...],
+) -> tuple[
+    tuple[int, ...],
+    tuple[cp_model.IntVar | None, ...],
+    tuple[cp_model.IntVar | None, ...],
+    tuple[cp_model.IntVar | None, ...],
+    dict[tuple[int, int, int], cp_model.IntVar],
+]:
+    """Add exact endpoint-derived break indicators without minute indexing."""
+
+    included_employee_indices = _included_ramp_agent_indices(day)
+    included_employee_set = set(included_employee_indices)
+    assignment_values = _assignment_values_by_employee(
+        day,
+        decisions,
+        fixed_employee_indices,
+    )
+    break_evaluable: list[cp_model.IntVar | None] = []
+    break_achieved: list[cp_model.IntVar | None] = []
+    known_unsatisfied_break: list[cp_model.IntVar | None] = []
+    break_gap_variables: dict[tuple[int, int, int], cp_model.IntVar] = {}
+    required_duration = timedelta(minutes=config.required_break_minutes)
+
+    for employee_index, employee in enumerate(day.employees):
+        if employee_index not in included_employee_set:
+            break_evaluable.append(None)
+            break_achieved.append(None)
+            known_unsatisfied_break.append(None)
+            continue
+
+        possible_assignments = assignment_values[employee_index]
+        assignment_count = sum(possible_assignments.values())
+        evaluable = model.new_bool_var(f"break_evaluable_e{employee_index}")
+        model.add(assignment_count >= 2).only_enforce_if(evaluable)
+        model.add(assignment_count <= 1).only_enforce_if(evaluable.Not())
+
+        ordered_flight_indices = sorted(
+            possible_assignments,
+            key=lambda flight_index: (
+                facts[flight_index].work_start,
+                facts[flight_index].work_end,
+                flight_index,
+            ),
+        )
+        assignment_prefix_counts: list[cp_model.IntVar | int] = [0]
+        for position, flight_index in enumerate(ordered_flight_indices, start=1):
+            prefix_count = model.new_int_var(
+                0,
+                position,
+                f"assignment_prefix_count_e{employee_index}_p{position}",
+            )
+            model.add(
+                prefix_count
+                == assignment_prefix_counts[-1]
+                + possible_assignments[flight_index]
+            )
+            assignment_prefix_counts.append(prefix_count)
+
+        employee_gap_variables: list[cp_model.IntVar] = []
+        for earlier_position, earlier_flight_index in enumerate(
+            ordered_flight_indices
+        ):
+            earlier = facts[earlier_flight_index]
+            for later_position in range(
+                earlier_position + 1, len(ordered_flight_indices)
+            ):
+                later_flight_index = ordered_flight_indices[later_position]
+                later = facts[later_flight_index]
+                gap_duration = later.work_start - earlier.work_end
+                if gap_duration < required_duration:
+                    continue
+                if not _one_eligible_shift_contains_assignment_span(
+                    employee,
+                    day,
+                    config,
+                    earlier.work_start,
+                    later.work_end,
+                ):
+                    continue
+
+                intervening_assignment_count = (
+                    assignment_prefix_counts[later_position]
+                    - assignment_prefix_counts[earlier_position + 1]
+                )
+                gap_variable = _add_exact_gap_indicator(
+                    model,
+                    possible_assignments[earlier_flight_index],
+                    possible_assignments[later_flight_index],
+                    intervening_assignment_count,
+                    (
+                        f"qualifying_break_gap_e{employee_index}_"
+                        f"f{earlier_flight_index}_f{later_flight_index}"
+                    ),
+                )
+                break_gap_variables[
+                    (employee_index, earlier_flight_index, later_flight_index)
+                ] = gap_variable
+                employee_gap_variables.append(gap_variable)
+
+        achieved = _add_exact_any_indicator(
+            model,
+            tuple(employee_gap_variables),
+            f"break_achieved_e{employee_index}",
+        )
+        unsatisfied = model.new_bool_var(
+            f"known_unsatisfied_break_e{employee_index}"
+        )
+        model.add(unsatisfied <= evaluable)
+        model.add(unsatisfied + achieved <= 1)
+        model.add(unsatisfied >= evaluable - achieved)
+        break_evaluable.append(evaluable)
+        break_achieved.append(achieved)
+        known_unsatisfied_break.append(unsatisfied)
+
+    return (
+        included_employee_indices,
+        tuple(break_evaluable),
+        tuple(break_achieved),
+        tuple(known_unsatisfied_break),
+        break_gap_variables,
+    )
+
+
+def _included_ramp_agent_indices(day: OperationalDay) -> tuple[int, ...]:
+    """Return enabled employees with at least one ordinary Ramp-Agent shift."""
+
+    return tuple(
+        employee_index
+        for employee_index, employee in enumerate(day.employees)
+        if employee.enabled
+        and any(
+            shift.employee_id.strip().casefold()
+            == employee.employee_id.strip().casefold()
+            and shift.normalized_role is OperationalRole.RAMP_AGENT
+            for shift in day.employee_shifts
+        )
+    )
+
+
+def _assignment_values_by_employee(
+    day: OperationalDay,
+    decisions: dict[tuple[int, int], cp_model.IntVar],
+    fixed_employee_indices: tuple[tuple[int, ...], ...],
+) -> tuple[dict[int, cp_model.IntVar | int], ...]:
+    values: list[dict[int, cp_model.IntVar | int]] = [
+        {} for _ in day.employees
+    ]
+    for flight_index, employee_indices in enumerate(fixed_employee_indices):
+        for employee_index in employee_indices:
+            values[employee_index][flight_index] = 1
+    for (employee_index, flight_index), decision in decisions.items():
+        values[employee_index][flight_index] = decision
+    return tuple(values)
+
+
+def _one_eligible_shift_contains_assignment_span(
+    employee: Employee,
+    day: OperationalDay,
+    config: OptimizerConfig,
+    span_start: datetime,
+    span_end: datetime,
+) -> bool:
+    return bool(
+        eligible_shifts_for_interval(
+            employee,
+            day.employee_shifts,
+            span_start,
+            span_end,
+            include_leads=False,
+            allow_trainees=config.allow_trainees_for_assignments,
+            allow_possible_ramp_support=(
+                config.allow_possible_ramp_support_for_assignments
+            ),
+        )
+    )
+
+
+def _add_exact_gap_indicator(
+    model: cp_model.CpModel,
+    earlier_assigned: cp_model.IntVar | int,
+    later_assigned: cp_model.IntVar | int,
+    intervening_assignment_count: cp_model.LinearExpr | int,
+    name: str,
+) -> cp_model.IntVar:
+    """Link a gap to assigned bounds and the absence of intervening work."""
+
+    indicator = model.new_bool_var(name)
+    model.add(indicator <= earlier_assigned)
+    model.add(indicator <= later_assigned)
+    model.add(intervening_assignment_count == 0).only_enforce_if(indicator)
+    model.add(
+        indicator
+        >= earlier_assigned
+        + later_assigned
+        - 1
+        - intervening_assignment_count
+    )
+    return indicator
+
+
+def _add_exact_any_indicator(
+    model: cp_model.CpModel,
+    values: tuple[cp_model.IntVar, ...],
+    name: str,
+) -> cp_model.IntVar:
+    indicator = model.new_bool_var(name)
+    if values:
+        model.add(sum(values) >= 1).only_enforce_if(indicator)
+        model.add(sum(values) == 0).only_enforce_if(indicator.Not())
+    else:
+        model.add(indicator == 0)
+    return indicator
 
 
 def _add_exact_threshold_indicator(
@@ -442,6 +704,19 @@ def _objective_stages(model_data: _ModelData) -> tuple[_ObjectiveStage, ...]:
             "largest_minimum_shortfall",
             False,
             model_data.largest_minimum_shortfall,
+        ),
+        # A single exact known-violation stage avoids rewarding extra flights
+        # merely to turn a non-evaluable employee into a satisfied one. Among
+        # employees who remain evaluable, minimizing violations is equivalent
+        # to maximizing achieved breaks.
+        _ObjectiveStage(
+            "known_unsatisfied_required_breaks",
+            False,
+            sum(
+                indicator
+                for indicator in model_data.known_unsatisfied_break
+                if indicator is not None
+            ),
         ),
         _ObjectiveStage(
             "preferred_staffed_flights", True, sum(model_data.preferred_met)
@@ -551,8 +826,23 @@ def _map_status(status: cp_model.CpSolverStatus) -> OptimizationStatus:
     return OptimizationStatus.UNKNOWN
 
 
+def _assigned_employee_indices_by_flight(
+    model_data: _ModelData,
+    solver: cp_model.CpSolver,
+) -> tuple[tuple[int, ...], ...]:
+    assigned_by_flight = [
+        set(employee_indices)
+        for employee_indices in model_data.fixed_employee_indices
+    ]
+    for (employee_index, flight_index), decision in model_data.decisions.items():
+        if solver.value(decision):
+            assigned_by_flight[flight_index].add(employee_index)
+    return tuple(tuple(sorted(indices)) for indices in assigned_by_flight)
+
+
 def _build_result(
     day: OperationalDay,
+    config: OptimizerConfig,
     model_data: _ModelData,
     solver: cp_model.CpSolver,
     status: OptimizationStatus,
@@ -561,14 +851,10 @@ def _build_result(
 ) -> OptimizationResult:
     flight_results: list[FlightAssignmentResult] = []
     all_warnings: list[ScheduleWarning] = []
+    assigned_by_flight = _assigned_employee_indices_by_flight(model_data, solver)
 
     for flight_index, flight in enumerate(day.flights):
-        assigned_indices = set(model_data.fixed_employee_indices[flight_index])
-        for (employee_index, candidate_flight_index), decision in (
-            model_data.decisions.items()
-        ):
-            if candidate_flight_index == flight_index and solver.value(decision):
-                assigned_indices.add(employee_index)
+        assigned_indices = assigned_by_flight[flight_index]
 
         assigned_employee_ids = tuple(
             employee.employee_id
@@ -615,7 +901,7 @@ def _build_result(
             close_covered = None
         else:
             assigned_employees = (
-                day.employees[index] for index in sorted(assigned_indices)
+                day.employees[index] for index in assigned_indices
             )
             assigned_qualifications = frozenset(
                 qualification
@@ -672,11 +958,93 @@ def _build_result(
             )
         )
 
+    employee_results: list[EmployeeScheduleResult] = []
+    for employee_index in model_data.included_employee_indices:
+        assigned_flight_indices = tuple(
+            flight_index
+            for flight_index, assigned_employee_indices in enumerate(
+                assigned_by_flight
+            )
+            if employee_index in assigned_employee_indices
+        )
+        ordered_flight_indices = tuple(
+            sorted(
+                assigned_flight_indices,
+                key=lambda flight_index: (
+                    model_data.facts[flight_index].work_start,
+                    model_data.facts[flight_index].work_end,
+                    flight_index,
+                ),
+            )
+        )
+        break_status = _derive_break_status(
+            day,
+            config,
+            model_data.facts,
+            employee_index,
+            ordered_flight_indices,
+        )
+        evaluable = model_data.break_evaluable[employee_index]
+        achieved = model_data.break_achieved[employee_index]
+        unsatisfied = model_data.known_unsatisfied_break[employee_index]
+        assert evaluable is not None
+        assert achieved is not None
+        assert unsatisfied is not None
+        assert bool(solver.value(evaluable)) is (
+            break_status
+            in {BreakStatus.SATISFIED, BreakStatus.UNSATISFIED}
+        )
+        assert bool(solver.value(achieved)) is (
+            break_status is BreakStatus.SATISFIED
+        )
+        assert bool(solver.value(unsatisfied)) is (
+            break_status is BreakStatus.UNSATISFIED
+        )
+
+        if break_status is BreakStatus.UNSATISFIED:
+            all_warnings.append(
+                ScheduleWarning(
+                    code=WarningCode.REQUIRED_BREAK_NOT_MET,
+                    severity=WarningSeverity.CRITICAL,
+                    message=(
+                        "Employee has no uninterrupted between-assignment "
+                        f"break of at least {config.required_break_minutes} minutes"
+                    ),
+                    employee_id=day.employees[employee_index].employee_id,
+                )
+            )
+
+        employee_results.append(
+            EmployeeScheduleResult(
+                employee_id=day.employees[employee_index].employee_id,
+                assigned_flights=tuple(
+                    day.flights[flight_index]
+                    for flight_index in ordered_flight_indices
+                ),
+                flight_count=len(ordered_flight_indices),
+                mainline_flight_count=sum(
+                    not model_data.facts[flight_index].express
+                    for flight_index in ordered_flight_indices
+                ),
+                express_flight_count=sum(
+                    model_data.facts[flight_index].express
+                    for flight_index in ordered_flight_indices
+                ),
+                three_person_flight_count=sum(
+                    flight_results[flight_index].staffing_count == 3
+                    for flight_index in ordered_flight_indices
+                ),
+                longest_consecutive_streak=None,
+                break_status=break_status,
+                adjusted_workload=None,
+            )
+        )
+
     assert isfinite(runtime)
     return OptimizationResult(
         status=status,
         flight_results=tuple(flight_results),
-        employee_results=(),
+        employee_results=tuple(employee_results),
         fairness_metrics=None,
         attempts=(),
         objective_values=objectives,
@@ -684,6 +1052,39 @@ def _build_result(
         emergency_lead_staffing_used=None,
         solver_runtime_seconds=runtime,
     )
+
+
+def _derive_break_status(
+    day: OperationalDay,
+    config: OptimizerConfig,
+    facts: tuple[FlightOperationalFacts, ...],
+    employee_index: int,
+    ordered_flight_indices: tuple[int, ...],
+) -> BreakStatus:
+    """Derive public break status from final chronological assignments."""
+
+    if len(ordered_flight_indices) < 2:
+        return BreakStatus.NOT_EVALUABLE_BETWEEN_ASSIGNMENTS
+
+    required_duration = timedelta(minutes=config.required_break_minutes)
+    employee = day.employees[employee_index]
+    for earlier_flight_index, later_flight_index in zip(
+        ordered_flight_indices,
+        ordered_flight_indices[1:],
+    ):
+        earlier = facts[earlier_flight_index]
+        later = facts[later_flight_index]
+        if later.work_start - earlier.work_end < required_duration:
+            continue
+        if _one_eligible_shift_contains_assignment_span(
+            employee,
+            day,
+            config,
+            earlier.work_start,
+            later.work_end,
+        ):
+            return BreakStatus.SATISFIED
+    return BreakStatus.UNSATISFIED
 
 
 def _empty_solver_result(

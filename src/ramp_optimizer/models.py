@@ -199,9 +199,9 @@ class EmployeeScheduleResult:
     mainline_flight_count: int
     express_flight_count: int
     three_person_flight_count: int
-    longest_consecutive_streak: int
+    longest_consecutive_streak: int | None
     break_status: BreakStatus
-    adjusted_workload: float
+    adjusted_workload: float | None
 
 
 @dataclass(frozen=True, slots=True)

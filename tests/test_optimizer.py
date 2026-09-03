@@ -456,6 +456,7 @@ def test_objective_reporting_matches_partial_schedule() -> None:
         "minimum_staffed_individual_qualification_coverage",
         "total_minimum_shortfall",
         "largest_minimum_shortfall",
+        "known_unsatisfied_required_breaks",
         "preferred_staffed_flights",
         "total_preferred_shortfall",
         "partial_crew_individual_qualification_coverage",
@@ -466,6 +467,7 @@ def test_objective_reporting_matches_partial_schedule() -> None:
         0,
         1,
         1,
+        0,
         0,
         2,
         0,
@@ -514,7 +516,14 @@ def test_result_preserves_order_facts_and_marks_future_metrics_unevaluated() -> 
     assert first_result.flight.gate == "B4"
     assert first_result.push_covered is True
     assert first_result.close_covered is False
-    assert result.employee_results == ()
+    assert tuple(item.employee_id for item in result.employee_results) == tuple(
+        employee.employee_id for employee in employees
+    )
+    assert all(
+        item.longest_consecutive_streak is None
+        and item.adjusted_workload is None
+        for item in result.employee_results
+    )
     assert result.fairness_metrics is None
     assert result.attempts == ()
     assert result.emergency_lead_staffing_used is None
@@ -530,6 +539,7 @@ def test_empty_day_and_no_employee_day_return_optimal_results() -> None:
     assert empty.status is OptimizationStatus.OPTIMAL
     assert empty.flight_results == ()
     assert [objective.value for objective in empty.objective_values] == [
+        0,
         0,
         0,
         0,

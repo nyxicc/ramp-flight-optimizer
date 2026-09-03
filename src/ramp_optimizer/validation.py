@@ -3,6 +3,7 @@
 from collections import defaultdict
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
+from decimal import Decimal
 from math import isfinite
 
 from ramp_optimizer.config import OptimizerConfig, TeamWorkImportConfig
@@ -18,6 +19,11 @@ from ramp_optimizer.timing import (
     derive_flight_operational_facts,
     derive_work_window,
     parse_numeric_flight_number,
+)
+from ramp_optimizer.workload import (
+    MAX_CP_SAT_INTEGER,
+    WorkloadConfigurationError,
+    scaled_workload_factors,
 )
 
 
@@ -129,6 +135,63 @@ def validate_config(config: OptimizerConfig) -> tuple[ValidationIssue, ...]:
                 "must be finite and at least 1",
             )
         )
+
+    valid_workload_scale = (
+        _is_integer(config.workload_scale) and config.workload_scale > 0
+    )
+    if valid_workload_scale and _is_finite_number_in_range(
+        config.express_workload_factor,
+        minimum=0,
+        maximum=1,
+        minimum_exclusive=True,
+    ):
+        if not _factor_is_exactly_representable(
+            config.express_workload_factor,
+            config.workload_scale,
+        ):
+            issues.append(
+                ValidationIssue(
+                    "UNREPRESENTABLE_EXPRESS_WORKLOAD_FACTOR",
+                    "config.express_workload_factor",
+                    "must be exactly representable at config.workload_scale",
+                )
+            )
+    if (
+        valid_workload_scale
+        and _is_finite_number(multiplier)
+        and multiplier >= 1
+        and not _factor_is_exactly_representable(
+            multiplier,
+            config.workload_scale,
+        )
+    ):
+        issues.append(
+            ValidationIssue(
+                "UNREPRESENTABLE_THREE_PERSON_WORKLOAD_MULTIPLIER",
+                "config.three_person_workload_multiplier",
+                "must be exactly representable at config.workload_scale",
+            )
+        )
+
+    workload_factor_issue_codes = {
+        "INVALID_EXPRESS_WORKLOAD_FACTOR",
+        "INVALID_THREE_PERSON_MULTIPLIER",
+        "UNREPRESENTABLE_EXPRESS_WORKLOAD_FACTOR",
+        "UNREPRESENTABLE_THREE_PERSON_WORKLOAD_MULTIPLIER",
+    }
+    if valid_workload_scale and not any(
+        issue.code in workload_factor_issue_codes for issue in issues
+    ):
+        try:
+            scaled_workload_factors(config)
+        except WorkloadConfigurationError:
+            issues.append(
+                ValidationIssue(
+                    "WORKLOAD_INTEGER_RANGE_EXCEEDED",
+                    "config",
+                    "scaled workload values exceed the supported integer range",
+                )
+            )
 
     time_limit = config.solver_time_limit_seconds
     if not _is_finite_number(time_limit) or time_limit <= 0:
@@ -617,6 +680,7 @@ def validate_operational_day(
         allow_trainees=allow_trainees,
         allow_possible_ramp_support=allow_possible_ramp_support,
     )
+    _validate_workload_integer_bounds(day, active_config, issues)
     return tuple(issues)
 
 
@@ -815,6 +879,41 @@ def _find_flight_index(flight: object, flights: tuple[Flight, ...]) -> int | Non
     )
 
 
+def _validate_workload_integer_bounds(
+    day: OperationalDay,
+    config: OptimizerConfig,
+    issues: list[ValidationIssue],
+) -> None:
+    """Reject conservative workload domains that exceed CP-SAT integers."""
+
+    try:
+        express_units, multiplier_units = scaled_workload_factors(config)
+    except WorkloadConfigurationError:
+        return
+
+    scale = config.workload_scale
+    maximum_assignment_units = max(
+        scale * scale,
+        express_units * scale,
+        scale * multiplier_units,
+        express_units * multiplier_units,
+    )
+    maximum_employee_workload = len(day.flights) * maximum_assignment_units
+    pair_count = len(day.employees) * (len(day.employees) - 1) // 2
+    maximum_pairwise_total = pair_count * maximum_employee_workload
+    if (
+        maximum_employee_workload > MAX_CP_SAT_INTEGER
+        or maximum_pairwise_total > MAX_CP_SAT_INTEGER
+    ):
+        issues.append(
+            ValidationIssue(
+                "WORKLOAD_INTEGER_RANGE_EXCEEDED",
+                "operational_day",
+                "adjusted-workload model bounds exceed the supported integer range",
+            )
+        )
+
+
 def _validate_shift_collisions(
     shifts_by_employee: dict[str, list[tuple[int, EmployeeShift]]],
     issues: list[ValidationIssue],
@@ -913,6 +1012,11 @@ def _is_finite_number_in_range(
         return False
     lower_ok = value > minimum if minimum_exclusive else value >= minimum
     return lower_ok and value <= maximum
+
+
+def _factor_is_exactly_representable(value: int | float, scale: int) -> bool:
+    scaled = Decimal(str(value)) * scale
+    return scaled == scaled.to_integral_value()
 
 
 def _validate_directional_flight_number(

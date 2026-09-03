@@ -463,6 +463,8 @@ def test_objective_reporting_matches_partial_schedule() -> None:
         "raw_flight_count_spread",
         "total_pairwise_flight_count_difference",
         "total_shift_adjusted_flight_count_deviation",
+        "adjusted_workload_spread",
+        "total_pairwise_adjusted_workload_difference",
     ]
     assert [objective.value for objective in result.objective_values] == [
         0,
@@ -477,6 +479,8 @@ def test_objective_reporting_matches_partial_schedule() -> None:
         0,
         0,
         0,
+        0,
+        0,
     ]
     assert all(objective.proven_optimal for objective in result.objective_values)
     assert result.status is OptimizationStatus.OPTIMAL
@@ -484,7 +488,7 @@ def test_objective_reporting_matches_partial_schedule() -> None:
     assert result.solver_runtime_seconds >= 0
 
 
-def test_result_preserves_order_facts_and_marks_future_metrics_unevaluated() -> None:
+def test_result_preserves_order_facts_and_reports_current_metrics() -> None:
     first = departure("3001", 9, heavy=True, gate="B4")
     second = arrival("102", 11)
     employees = (
@@ -527,7 +531,7 @@ def test_result_preserves_order_facts_and_marks_future_metrics_unevaluated() -> 
     )
     assert all(
         item.longest_consecutive_streak is None
-        and item.adjusted_workload is None
+        and item.adjusted_workload is not None
         for item in result.employee_results
     )
     assert result.fairness_metrics is not None
@@ -538,7 +542,7 @@ def test_result_preserves_order_facts_and_marks_future_metrics_unevaluated() -> 
     assert result.fairness_metrics.lowest_flight_count == 1
     assert result.fairness_metrics.flight_count_spread == 1
     assert result.fairness_metrics.maximum_consecutive_streak is None
-    assert result.fairness_metrics.adjusted_workload_spread is None
+    assert result.fairness_metrics.adjusted_workload_spread is not None
     assert result.attempts == ()
     assert result.emergency_lead_staffing_used is None
     assert day == original_day
@@ -553,6 +557,8 @@ def test_empty_day_and_no_employee_day_return_optimal_results() -> None:
     assert empty.status is OptimizationStatus.OPTIMAL
     assert empty.flight_results == ()
     assert [objective.value for objective in empty.objective_values] == [
+        0,
+        0,
         0,
         0,
         0,

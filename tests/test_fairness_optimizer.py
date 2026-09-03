@@ -157,7 +157,7 @@ def test_fairness_objectives_follow_all_existing_objectives() -> None:
         (10, "raw_flight_count_spread"),
         (11, "total_pairwise_flight_count_difference"),
     ]
-    assert len(result.objective_values) == 12
+    assert len(result.objective_values) == 14
 
 
 def test_pairwise_stage_resolves_a_tied_spread_in_the_middle() -> None:
@@ -564,13 +564,13 @@ def test_public_counts_order_and_future_fields_match_final_assignments() -> None
     assert all(
         item.flight_count == len(item.assigned_flights)
         and item.longest_consecutive_streak is None
-        and item.adjusted_workload is None
+        and item.adjusted_workload is not None
         for item in result.employee_results
     )
     assert result.fairness_metrics is not None
     assert result.fairness_metrics.total_assignments == assigned_count(result)
     assert result.fairness_metrics.maximum_consecutive_streak is None
-    assert result.fairness_metrics.adjusted_workload_spread is None
+    assert result.fairness_metrics.adjusted_workload_spread == 1.0
 
 
 def test_fairness_population_preserves_original_employee_order() -> None:

@@ -5,7 +5,7 @@ from synthetic operational data.
 
 ## Current scope
 
-Milestones 1-8 are implemented. The repository currently provides:
+Milestones 1-9 are implemented. The repository currently provides:
 
 - immutable employee, shift, flight, and result domain models;
 - structured input validation;
@@ -17,10 +17,10 @@ Milestones 1-8 are implemented. The repository currently provides:
 - explainable employee-flight eligibility and validated candidate preprocessing;
 - a limited CP-SAT optimizer for staffing, push and close-out qualification
   coverage, required between-assignment breaks, raw flight-count fairness, and
-  shift-length adjustment.
+  shift-length and adjusted-workload fairness.
 
-Express and three-person weighted workload scoring, streak penalties,
-continuity, and emergency Lead solving are not implemented yet.
+Consecutive-flight penalties, continuity, emergency Lead solving, and later
+integration work are not implemented yet.
 
 ## Employee and availability model
 
@@ -249,8 +249,9 @@ normalized roles, flight numbers, and fixed status never grant qualifications.
 
 ### Required breaks
 
-Each included Ramp Agent should receive an uninterrupted, flight-free gap of at
-least `OptimizerConfig.required_break_minutes`, which defaults to 30 minutes.
+Each employee included by the active ordinary role policy should receive an
+uninterrupted, flight-free gap of at least
+`OptimizerConfig.required_break_minutes`, which defaults to 30 minutes.
 Only a gap between two consecutive final assignments counts. Time before the
 first assignment and after the last assignment never counts.
 
@@ -268,11 +269,11 @@ idle period into the actual consecutive gaps.
 
 Employee break results use these statuses:
 
-- `NOT_EVALUABLE_BETWEEN_ASSIGNMENTS`: the included Ramp Agent has fewer than
-  two final assignments;
+- `NOT_EVALUABLE_BETWEEN_ASSIGNMENTS`: the included ordinary employee has fewer
+  than two final assignments;
 - `SATISFIED`: at least one qualifying consecutive gap exists;
 - `UNSATISFIED`: at least two assignments exist but no qualifying gap does;
-- `NOT_APPLICABLE`: reserved for employees outside the ordinary Ramp-Agent
+- `NOT_APPLICABLE`: reserved for employees outside the ordinary-policy
   population, for whom this optimizer does not create employee results.
 
 An unsatisfied break is recoverable and produces one critical employee-level
@@ -285,7 +286,7 @@ in stable employee order.
 Minimum staffing, qualification coverage, and break coverage are recoverable
 rather than hard constraints, so a constrained day still returns its best
 partial schedule with critical warnings for every known shortage. The optimizer
-uses twelve sequential integer objective stages:
+uses fourteen sequential integer objective stages:
 
 1. Maximize flights reaching minimum staffing.
 2. Maximize minimum-staffed departures and turns covering both qualifications.
@@ -293,7 +294,7 @@ uses twelve sequential integer objective stages:
    and turns.
 4. Minimize total minimum-staffing shortfall.
 5. Minimize the largest individual minimum shortfall.
-6. Minimize known unsatisfied required breaks among included Ramp Agents.
+6. Minimize known unsatisfied required breaks among included ordinary employees.
 7. Maximize flights reaching preferred staffing.
 8. Minimize total preferred-staffing shortfall.
 9. Maximize separate qualification coverage on below-minimum partial crews as
@@ -302,6 +303,8 @@ uses twelve sequential integer objective stages:
 11. Minimize the total pairwise absolute flight-count difference among those
     participants.
 12. Minimize total shift-adjusted proportional flight-count deviation.
+13. Minimize adjusted-workload spread.
+14. Minimize total pairwise adjusted-workload difference.
 
 The exact formulation uses one break stage rather than redundant achieved and
 unsatisfied stages. Minimizing known unsatisfied breaks improves employees with
@@ -313,15 +316,22 @@ before preferred staffing.
 ### Raw flight-count fairness
 
 Fairness is evaluated only after all nine staffing, qualification, break, and
-preferred-staffing outcomes are fixed. Its population contains each enabled
-employee with at least one ordinary `RAMP_AGENT` shift who had at least one
-legal assignment opportunity before solving or at least one fixed assignment.
-An employee stays in this population even when the final result assigns them
-zero flights.
-Disabled employees, Leads excluded from the ordinary pass, non-ramp and unknown
-roles, employees without a shift, and employees with neither an opportunity nor
-a fixed assignment are excluded. Population order follows the input employee
-order.
+preferred-staffing outcomes are fixed. Its ordinary employee-result population
+contains each enabled employee with at least one shift whose normalized role is
+assignment-eligible under the active ordinary policy. `RAMP_AGENT` is always
+eligible, `TRAINEE` participates only when
+`allow_trainees_for_assignments=True`, and `POSSIBLE_RAMP_SUPPORT` participates
+only when `allow_possible_ramp_support_for_assignments=True`. The fairness
+participant subset contains ordinary employees who had at least one legal
+assignment opportunity before solving or at least one fixed assignment. A
+participant stays in that subset even when the final result assigns them zero
+flights.
+
+Disabled employees, Leads, non-ramp and unknown roles, employees without an
+ordinary-policy shift, and employees with neither an opportunity nor a fixed
+assignment are excluded from fairness. `allow_leads_for_minimum_staffing=True`
+does not add Leads to this ordinary pass; it is reserved for the later emergency
+Lead solver. Population order follows the input employee order.
 
 The model counts each selected or fixed aircraft movement once. Arrival-only,
 departure-only, and turn movements therefore each add one; a turn's two flight
@@ -388,6 +398,44 @@ illegal assignment. There are no shift-imbalance warnings. Shift length is not
 an opportunity normalization: candidate count, flight density, qualifications,
 and nonoverlapping assignment combinations do not change the target.
 
+### Adjusted-workload fairness
+
+Stages 13 and 14 are a secondary refinement after raw flight-count fairness and
+the shift-length adjustment have both been fixed. Stage 13 minimizes the spread
+between the highest and lowest adjusted workload. Stage 14 then minimizes total
+pairwise adjusted-workload difference, resolving avoidable imbalance in the
+middle of a population without changing any earlier optimum. Adjusted workload
+therefore cannot exchange a `3–3` raw assignment distribution for `4–2`, and it
+cannot worsen the Stage 12 proportional shift-length result.
+
+The default synthetic workload assumptions are:
+
+- Mainline assignment: `1.00`;
+- Express assignment: `0.80`;
+- Mainline assignment on a final crew of exactly three: `1.15`;
+- Express assignment on a final crew of exactly three: `0.92` (`0.80 × 1.15`).
+
+The three-person multiplier means exactly `staffing_count == 3`; it is not tied
+to configurable minimum staffing. Counts of two, four, or five do not activate
+it. The same rule applies to normal and heavy flights, and fixed employees count
+toward final staffing. Heavy status has no independent workload multiplier.
+Flight duration, direction, gate, qualifications, aircraft information, and tow
+notes also add no workload weight in this milestone. Service category comes
+from the already-derived operational facts rather than being reparsed by the
+optimizer.
+
+CP-SAT receives integers only. With the default `workload_scale=100`, the model
+retains the product of two factors at a unit scale of `100 × 100`, producing
+exact values of `10,000`, `8,000`, `11,500`, and `9,200` units for the four
+combinations above. Configuration validation rejects factors that are not
+exactly representable at the selected scale or bounds outside CP-SAT's integer
+range instead of silently rounding. Public reporting divides only at the result
+boundary. Fixed assignments contribute their full category and exact-crew
+workload and remain immutable.
+
+These factors are configurable, explainable portfolio assumptions. They are not
+empirical safety measurements or proprietary airline standards.
+
 Each proven optimum is fixed before solving the next stage. Sequential solves
 preserve true priority without arbitrary giant weights, and all stages share
 one total time budget. Qualification stages therefore cannot reduce the maximum
@@ -412,32 +460,35 @@ shortages, and runtime. Qualification warnings use the structured
 `PUSH_QUALIFICATION_NOT_MET` and `CLOSE_QUALIFICATION_NOT_MET` codes and coexist
 with minimum-staffing and employee break warnings.
 
-`OptimizationResult.employee_results` contains ordinary enabled Ramp Agents in
-stable employee order. Each result reports chronologically ordered assignments,
-raw total, Mainline, Express, and three-person-flight counts, plus break status.
+`OptimizationResult.employee_results` contains enabled employees admitted by
+the active ordinary role policy in stable employee order. Each result reports
+chronologically ordered assignments, raw total, Mainline, Express, and
+three-person-flight counts, plus break status.
 The raw total is the count used by Milestone 7 fairness for employees in its
 population; Mainline, Express, and three-person counts remain descriptive.
 Each ordinary employee result also reports scheduled shift minutes. Fairness
 participants receive their proportional target flight count and human-readable
 absolute actual-versus-target deviation; ordinary employee results outside the
 fairness population use `None` for target and deviation.
-`longest_consecutive_streak` and `adjusted_workload` are explicitly `None`
-because their later milestones have not been implemented. Leads and unrelated
-roles are excluded from ordinary employee results, and emergency Lead
+`adjusted_workload` reports the reconstructed final fixed-point workload for
+every included ordinary employee, including factual zero workload for employees
+outside the active fairness subset. `longest_consecutive_streak` remains
+explicitly `None` because Milestone 10 has not been implemented. Leads and
+unrelated roles are excluded from ordinary employee results, and emergency Lead
 configuration does not enable a second solver pass.
 
 `OptimizationResult.fairness_metrics` reports the fairness population size,
 total and average assignment counts, highest and lowest counts, and their
-spread. It also reports total participating shift minutes and the sum of public
-actual-versus-target deviations. These values are reconstructed from final
-assignments and authoritative shifts; the stage-12 objective remains the exact
-cross-multiplied integer representation. Its `maximum_consecutive_streak` and
-`adjusted_workload_spread` fields remain explicitly `None`.
+spread. It also reports total participating shift minutes, the sum of public
+actual-versus-target deviations, and adjusted-workload spread. These values are
+reconstructed from final assignments and authoritative shifts; Stage 12 and the
+workload objective values remain exact integers. Its
+`maximum_consecutive_streak` field remains explicitly `None`.
 
 This optimizer is not operationally complete. It does not implement Milestone
-9 Express and three-person workload adjustment, Milestone 10 consecutive-flight
-penalties, Milestone 11 team continuity, Milestone 12 emergency Lead solving,
-or later reporting, torture-test, benchmark, and polish milestones.
+10 consecutive-flight penalties, Milestone 11 team continuity, Milestone 12
+emergency Lead solving, or later reporting, torture-test, benchmark, and polish
+milestones.
 
 ## TeamWork schedule import
 

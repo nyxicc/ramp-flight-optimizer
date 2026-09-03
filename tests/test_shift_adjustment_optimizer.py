@@ -214,13 +214,13 @@ def test_objective_reporting_appends_shift_adjustment_as_stage_12() -> None:
         one_person_config(),
     )
 
-    assert len(result.objective_values) == 12
-    assert result.objective_values[-1].stage == 12
-    assert result.objective_values[-1].name == (
+    assert len(result.objective_values) == 14
+    assert result.objective_values[11].stage == 12
+    assert result.objective_values[11].name == (
         "total_shift_adjusted_flight_count_deviation"
     )
-    assert result.objective_values[-1].value == 0
-    assert result.objective_values[-1].proven_optimal
+    assert result.objective_values[11].value == 0
+    assert result.objective_values[11].proven_optimal
 
 
 def test_fixed_short_shift_work_contributes_and_optional_work_favors_long_shift() -> None:
@@ -537,7 +537,7 @@ def test_one_participant_has_zero_shift_adjusted_deviation() -> None:
     assert result.objective_values[11].value == 0
 
 
-def test_shift_adjustment_adds_no_warnings_and_later_fields_stay_none() -> None:
+def test_shift_adjustment_adds_no_warnings_and_streak_fields_stay_none() -> None:
     workers = (employee("LONG"), employee("SHORT"))
     shifts = (
         shift("LONG", at(8), at(16)),
@@ -551,12 +551,12 @@ def test_shift_adjustment_adds_no_warnings_and_later_fields_stay_none() -> None:
     assert result.warnings == ()
     assert all(
         item.longest_consecutive_streak is None
-        and item.adjusted_workload is None
+        and item.adjusted_workload is not None
         for item in result.employee_results
     )
     assert result.fairness_metrics is not None
     assert result.fairness_metrics.maximum_consecutive_streak is None
-    assert result.fairness_metrics.adjusted_workload_spread is None
+    assert result.fairness_metrics.adjusted_workload_spread is not None
 
 
 def test_timeout_during_shift_stage_preserves_stage_11_solution(monkeypatch) -> None:

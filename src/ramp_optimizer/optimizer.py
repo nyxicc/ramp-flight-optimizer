@@ -1,4 +1,4 @@
-"""Milestone 8 optimizer with raw-count and shift-length fairness."""
+"""Milestone 9 optimizer with raw-count, shift, and workload fairness."""
 
 from dataclasses import dataclass
 from datetime import datetime, timedelta
@@ -40,6 +40,11 @@ from ramp_optimizer.timing import (
     FlightOperationalFacts,
     derive_flight_operational_facts,
 )
+from ramp_optimizer.workload import (
+    adjusted_assignment_workload_units,
+    scaled_workload_factors,
+    workload_units_to_public_value,
+)
 
 
 @dataclass(slots=True)
@@ -78,6 +83,14 @@ class _ModelData:
     total_fairness_assignment_count: cp_model.IntVar
     shift_adjusted_deviations: tuple[cp_model.IntVar | None, ...]
     total_shift_adjusted_deviation: cp_model.IntVar
+    three_person_staffing: tuple[cp_model.IntVar, ...]
+    assigned_to_three_person_flight: dict[tuple[int, int], cp_model.IntVar]
+    adjusted_workload_units: tuple[cp_model.IntVar | None, ...]
+    highest_adjusted_workload: cp_model.IntVar
+    lowest_adjusted_workload: cp_model.IntVar
+    adjusted_workload_spread: cp_model.IntVar
+    pairwise_adjusted_workload_differences: tuple[cp_model.IntVar, ...]
+    total_pairwise_adjusted_workload_difference: cp_model.IntVar
 
 
 @dataclass(frozen=True, slots=True)
@@ -90,7 +103,7 @@ class _ObjectiveStage:
 def optimize_flight_assignments(
     day: OperationalDay, config: OptimizerConfig | None = None
 ) -> OptimizationResult:
-    """Optimize operations, breaks, raw counts, then shift-length fairness."""
+    """Optimize operations, then raw, shift-length, and workload fairness."""
 
     active_config = config or OptimizerConfig()
     started_at = monotonic()
@@ -344,6 +357,25 @@ def _build_model(
         fairness_employee_indices,
         fairness_flight_counts,
     )
+    (
+        three_person_staffing,
+        assigned_to_three_person_flight,
+        adjusted_workload_units,
+        highest_adjusted_workload,
+        lowest_adjusted_workload,
+        adjusted_workload_spread,
+        pairwise_adjusted_workload_differences,
+        total_pairwise_adjusted_workload_difference,
+    ) = _add_adjusted_workload_model(
+        model,
+        day,
+        config,
+        decisions,
+        fixed_employee_indices,
+        tuple(staff_counts),
+        facts,
+        fairness_employee_indices,
+    )
 
     return _ModelData(
         model=model,
@@ -390,6 +422,18 @@ def _build_model(
         total_fairness_assignment_count=total_fairness_assignment_count,
         shift_adjusted_deviations=shift_adjusted_deviations,
         total_shift_adjusted_deviation=total_shift_adjusted_deviation,
+        three_person_staffing=three_person_staffing,
+        assigned_to_three_person_flight=assigned_to_three_person_flight,
+        adjusted_workload_units=adjusted_workload_units,
+        highest_adjusted_workload=highest_adjusted_workload,
+        lowest_adjusted_workload=lowest_adjusted_workload,
+        adjusted_workload_spread=adjusted_workload_spread,
+        pairwise_adjusted_workload_differences=(
+            pairwise_adjusted_workload_differences
+        ),
+        total_pairwise_adjusted_workload_difference=(
+            total_pairwise_adjusted_workload_difference
+        ),
     )
 
 
@@ -843,6 +887,171 @@ def _add_shift_length_adjustment_model(
     )
 
 
+def _add_adjusted_workload_model(
+    model: cp_model.CpModel,
+    day: OperationalDay,
+    config: OptimizerConfig,
+    decisions: dict[tuple[int, int], cp_model.IntVar],
+    fixed_employee_indices: tuple[tuple[int, ...], ...],
+    staff_counts: tuple[cp_model.IntVar, ...],
+    facts: tuple[FlightOperationalFacts, ...],
+    fairness_employee_indices: tuple[int, ...],
+) -> tuple[
+    tuple[cp_model.IntVar, ...],
+    dict[tuple[int, int], cp_model.IntVar],
+    tuple[cp_model.IntVar | None, ...],
+    cp_model.IntVar,
+    cp_model.IntVar,
+    cp_model.IntVar,
+    tuple[cp_model.IntVar, ...],
+    cp_model.IntVar,
+]:
+    """Add exact fixed-point workload values and fairness comparisons."""
+
+    express_factor_units, three_person_factor_units = scaled_workload_factors(
+        config
+    )
+    scale = config.workload_scale
+    base_units_by_flight = tuple(
+        express_factor_units * scale if flight_facts.express else scale * scale
+        for flight_facts in facts
+    )
+    three_person_units_by_flight = tuple(
+        (
+            express_factor_units * three_person_factor_units
+            if flight_facts.express
+            else scale * three_person_factor_units
+        )
+        for flight_facts in facts
+    )
+
+    three_person_staffing = tuple(
+        _add_exact_value_indicator(
+            model,
+            staff_count,
+            3,
+            f"three_person_staffing_f{flight_index}",
+        )
+        for flight_index, staff_count in enumerate(staff_counts)
+    )
+    assigned_to_three_person_flight: dict[
+        tuple[int, int], cp_model.IntVar
+    ] = {}
+    for (employee_index, flight_index), decision in decisions.items():
+        assigned_to_three_person_flight[(employee_index, flight_index)] = (
+            _add_exact_and_indicator(
+                model,
+                decision,
+                three_person_staffing[flight_index],
+                f"assigned_to_three_person_e{employee_index}_f{flight_index}",
+            )
+        )
+
+    maximum_assignment_units = max(three_person_units_by_flight, default=0)
+    if base_units_by_flight:
+        maximum_assignment_units = max(
+            maximum_assignment_units,
+            max(base_units_by_flight),
+        )
+    maximum_employee_workload = len(day.flights) * maximum_assignment_units
+    fairness_employee_set = set(fairness_employee_indices)
+    employee_workloads: list[cp_model.IntVar | None] = []
+    participating_workloads: list[cp_model.IntVar] = []
+    for employee_index in range(len(day.employees)):
+        if employee_index not in fairness_employee_set:
+            employee_workloads.append(None)
+            continue
+
+        contributions: list[cp_model.LinearExpr | int] = []
+        for flight_index in range(len(day.flights)):
+            base_units = base_units_by_flight[flight_index]
+            three_person_increment = (
+                three_person_units_by_flight[flight_index] - base_units
+            )
+            if employee_index in fixed_employee_indices[flight_index]:
+                contributions.append(
+                    base_units
+                    + three_person_increment
+                    * three_person_staffing[flight_index]
+                )
+                continue
+            decision = decisions.get((employee_index, flight_index))
+            if decision is None:
+                continue
+            assigned_to_three = assigned_to_three_person_flight[
+                (employee_index, flight_index)
+            ]
+            contributions.append(
+                base_units * decision
+                + three_person_increment * assigned_to_three
+            )
+
+        employee_workload = model.new_int_var(
+            0,
+            maximum_employee_workload,
+            f"adjusted_workload_units_e{employee_index}",
+        )
+        model.add(employee_workload == sum(contributions))
+        employee_workloads.append(employee_workload)
+        participating_workloads.append(employee_workload)
+
+    highest_workload = model.new_int_var(
+        0,
+        maximum_employee_workload,
+        "highest_adjusted_workload_units",
+    )
+    lowest_workload = model.new_int_var(
+        0,
+        maximum_employee_workload,
+        "lowest_adjusted_workload_units",
+    )
+    if participating_workloads:
+        model.add_max_equality(highest_workload, participating_workloads)
+        model.add_min_equality(lowest_workload, participating_workloads)
+    else:
+        model.add(highest_workload == 0)
+        model.add(lowest_workload == 0)
+
+    workload_spread = model.new_int_var(
+        0,
+        maximum_employee_workload,
+        "adjusted_workload_spread_units",
+    )
+    model.add(workload_spread == highest_workload - lowest_workload)
+
+    pairwise_differences: list[cp_model.IntVar] = []
+    for pair_index, (left, right) in enumerate(
+        combinations(participating_workloads, 2)
+    ):
+        difference = model.new_int_var(
+            0,
+            maximum_employee_workload,
+            f"pairwise_adjusted_workload_difference_units_{pair_index}",
+        )
+        model.add_abs_equality(difference, left - right)
+        pairwise_differences.append(difference)
+
+    maximum_total_pairwise_difference = (
+        len(pairwise_differences) * maximum_employee_workload
+    )
+    total_pairwise_difference = model.new_int_var(
+        0,
+        maximum_total_pairwise_difference,
+        "total_pairwise_adjusted_workload_difference_units",
+    )
+    model.add(total_pairwise_difference == sum(pairwise_differences))
+    return (
+        three_person_staffing,
+        assigned_to_three_person_flight,
+        tuple(employee_workloads),
+        highest_workload,
+        lowest_workload,
+        workload_spread,
+        tuple(pairwise_differences),
+        total_pairwise_difference,
+    )
+
+
 def _scheduled_shift_minutes_for_employee(
     day: OperationalDay,
     config: OptimizerConfig,
@@ -940,6 +1149,20 @@ def _add_exact_threshold_indicator(
     indicator = model.new_bool_var(name)
     model.add(staff_count >= threshold).only_enforce_if(indicator)
     model.add(staff_count <= threshold - 1).only_enforce_if(indicator.Not())
+    return indicator
+
+
+def _add_exact_value_indicator(
+    model: cp_model.CpModel,
+    value: cp_model.IntVar,
+    target: int,
+    name: str,
+) -> cp_model.IntVar:
+    """Return a Boolean equal to whether an integer variable equals a value."""
+
+    indicator = model.new_bool_var(name)
+    model.add(value == target).only_enforce_if(indicator)
+    model.add(value != target).only_enforce_if(indicator.Not())
     return indicator
 
 
@@ -1066,6 +1289,16 @@ def _objective_stages(model_data: _ModelData) -> tuple[_ObjectiveStage, ...]:
             "total_shift_adjusted_flight_count_deviation",
             False,
             model_data.total_shift_adjusted_deviation,
+        ),
+        _ObjectiveStage(
+            "adjusted_workload_spread",
+            False,
+            model_data.adjusted_workload_spread,
+        ),
+        _ObjectiveStage(
+            "total_pairwise_adjusted_workload_difference",
+            False,
+            model_data.total_pairwise_adjusted_workload_difference,
         ),
     )
 
@@ -1206,6 +1439,9 @@ def _build_result(
         requirements = model_data.requirements[flight_index]
         facts = model_data.facts[flight_index]
         staffing_count = len(assigned_employee_ids)
+        assert bool(solver.value(model_data.three_person_staffing[flight_index])) is (
+            staffing_count == 3
+        )
         minimum_met = staffing_count >= requirements.minimum
         preferred_met = staffing_count >= requirements.preferred
         minimum_shortfall = max(0, requirements.minimum - staffing_count)
@@ -1342,6 +1578,54 @@ def _build_result(
         == total_scaled_shift_deviation
     )
 
+    adjusted_units_by_employee: dict[int, int] = {}
+    for employee_index in model_data.included_employee_indices:
+        adjusted_units = sum(
+            adjusted_assignment_workload_units(
+                model_data.facts[flight_index],
+                flight_results[flight_index].staffing_count,
+                config,
+            )
+            for flight_index, assigned_employee_indices in enumerate(
+                assigned_by_flight
+            )
+            if employee_index in assigned_employee_indices
+        )
+        adjusted_units_by_employee[employee_index] = adjusted_units
+        modeled_workload = model_data.adjusted_workload_units[employee_index]
+        if modeled_workload is not None:
+            assert solver.value(modeled_workload) == adjusted_units
+
+    fairness_workloads = tuple(
+        adjusted_units_by_employee[employee_index]
+        for employee_index in model_data.fairness_employee_indices
+    )
+    highest_adjusted_workload = max(fairness_workloads, default=0)
+    lowest_adjusted_workload = min(fairness_workloads, default=0)
+    adjusted_workload_spread_units = (
+        highest_adjusted_workload - lowest_adjusted_workload
+    )
+    total_pairwise_adjusted_workload_difference = sum(
+        abs(left - right)
+        for left, right in combinations(fairness_workloads, 2)
+    )
+    assert (
+        solver.value(model_data.highest_adjusted_workload)
+        == highest_adjusted_workload
+    )
+    assert (
+        solver.value(model_data.lowest_adjusted_workload)
+        == lowest_adjusted_workload
+    )
+    assert (
+        solver.value(model_data.adjusted_workload_spread)
+        == adjusted_workload_spread_units
+    )
+    assert (
+        solver.value(model_data.total_pairwise_adjusted_workload_difference)
+        == total_pairwise_adjusted_workload_difference
+    )
+
     employee_results: list[EmployeeScheduleResult] = []
     for employee_index in model_data.included_employee_indices:
         assigned_flight_indices = tuple(
@@ -1398,6 +1682,17 @@ def _build_result(
                 )
             )
 
+        mainline_flight_count = sum(
+            not model_data.facts[flight_index].express
+            for flight_index in ordered_flight_indices
+        )
+        express_flight_count = sum(
+            model_data.facts[flight_index].express
+            for flight_index in ordered_flight_indices
+        )
+        assert mainline_flight_count + express_flight_count == len(
+            ordered_flight_indices
+        )
         employee_results.append(
             EmployeeScheduleResult(
                 employee_id=day.employees[employee_index].employee_id,
@@ -1406,21 +1701,18 @@ def _build_result(
                     for flight_index in ordered_flight_indices
                 ),
                 flight_count=len(ordered_flight_indices),
-                mainline_flight_count=sum(
-                    not model_data.facts[flight_index].express
-                    for flight_index in ordered_flight_indices
-                ),
-                express_flight_count=sum(
-                    model_data.facts[flight_index].express
-                    for flight_index in ordered_flight_indices
-                ),
+                mainline_flight_count=mainline_flight_count,
+                express_flight_count=express_flight_count,
                 three_person_flight_count=sum(
                     flight_results[flight_index].staffing_count == 3
                     for flight_index in ordered_flight_indices
                 ),
                 longest_consecutive_streak=None,
                 break_status=break_status,
-                adjusted_workload=None,
+                adjusted_workload=workload_units_to_public_value(
+                    adjusted_units_by_employee[employee_index],
+                    config,
+                ),
                 scheduled_shift_minutes=_scheduled_shift_minutes_for_employee(
                     day,
                     config,
@@ -1462,7 +1754,10 @@ def _build_result(
         lowest_flight_count=lowest_flight_count,
         flight_count_spread=flight_count_spread,
         maximum_consecutive_streak=None,
-        adjusted_workload_spread=None,
+        adjusted_workload_spread=workload_units_to_public_value(
+            adjusted_workload_spread_units,
+            config,
+        ),
         total_participating_shift_minutes=total_shift_minutes,
         total_shift_adjusted_deviation=(
             total_scaled_shift_deviation / total_shift_minutes

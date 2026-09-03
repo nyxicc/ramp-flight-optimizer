@@ -66,6 +66,13 @@ from ramp_optimizer.validation import (
     validate_or_raise,
     validate_teamwork_import_config,
 )
+from ramp_optimizer.workload import (
+    WorkloadConfigurationError,
+    adjusted_assignment_workload_units,
+    scaled_workload_factors,
+    workload_unit_scale,
+    workload_units_to_public_value,
+)
 from ramp_optimizer.candidates import build_candidate_assignments
 from ramp_optimizer.teamwork_import import (
     import_teamwork_schedule,
@@ -77,6 +84,7 @@ from ramp_optimizer.teamwork_import import (
 
 __all__ = [
     "assess_employee_flight_eligibility",
+    "adjusted_assignment_workload_units",
     "BreakStatus",
     "build_candidate_assignments",
     "CandidateAssignment",
@@ -126,10 +134,14 @@ __all__ = [
     "StaffingRequirements",
     "StaffingStatus",
     "staffing_requirements_for",
+    "scaled_workload_factors",
     "TeamWorkImportConfig",
     "ValidationIssue",
     "WarningCode",
     "WarningSeverity",
+    "WorkloadConfigurationError",
+    "workload_unit_scale",
+    "workload_units_to_public_value",
     "VacancyRecord",
     "validate_config",
     "validate_operational_day",

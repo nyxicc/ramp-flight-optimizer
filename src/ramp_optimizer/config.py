@@ -25,7 +25,7 @@ class OptimizerConfig:
     """Configurable Phase 1 assumptions.
 
     Workload factors are synthetic, explainable defaults rather than empirically
-    validated measurements. CP-SAT will later convert them to scaled integers.
+    validated measurements. CP-SAT converts them to exact scaled integers.
     """
 
     arrival_preparation_minutes: int = 10

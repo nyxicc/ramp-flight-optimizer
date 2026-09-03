@@ -525,7 +525,7 @@ def test_all_flight_types_participate_in_chronological_break_timing() -> None:
     assert break_result(result).break_status is BreakStatus.SATISFIED
 
 
-def test_employee_results_have_stable_order_raw_counts_and_unevaluated_fields() -> None:
+def test_employee_results_have_stable_order_raw_counts_and_workload() -> None:
     express = arrival("3001", 10, 40)
     mainline = arrival("101", 8, 40)
     workers = (employee("E003"), employee("E001"), employee("E002"))
@@ -546,7 +546,7 @@ def test_employee_results_have_stable_order_raw_counts_and_unevaluated_fields() 
         assert item.express_flight_count == 1
         assert item.three_person_flight_count == 2
         assert item.longest_consecutive_streak is None
-        assert item.adjusted_workload is None
+        assert item.adjusted_workload == 2.07
 
 
 def test_disabled_leads_and_non_ramp_workers_have_no_employee_results() -> None:

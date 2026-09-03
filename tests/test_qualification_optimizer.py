@@ -410,7 +410,7 @@ def test_final_tie_breaker_prefers_coverage_on_below_minimum_partial_crew() -> N
     assert departure_result.assigned_employee_ids == ("PUSH",)
     assert departure_result.push_covered is True
     assert departure_result.close_covered is False
-    assert result.objective_values[-1].value == 1
+    assert result.objective_values[8].value == 1
 
 
 @pytest.mark.parametrize("assigned", [False, True])

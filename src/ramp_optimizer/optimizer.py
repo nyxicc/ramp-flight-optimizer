@@ -1,4 +1,4 @@
-"""Milestone 6 CP-SAT optimizer for staffing, qualifications, and breaks."""
+"""Milestone 7 optimizer for operations, breaks, and raw-count fairness."""
 
 from dataclasses import dataclass
 from datetime import datetime, timedelta
@@ -16,6 +16,7 @@ from ramp_optimizer.models import (
     CandidateAssignment,
     Employee,
     EmployeeScheduleResult,
+    FairnessMetrics,
     FlightAssignmentResult,
     ObjectiveValue,
     OperationalDay,
@@ -63,6 +64,13 @@ class _ModelData:
     break_achieved: tuple[cp_model.IntVar | None, ...]
     known_unsatisfied_break: tuple[cp_model.IntVar | None, ...]
     break_gap_variables: dict[tuple[int, int, int], cp_model.IntVar]
+    fairness_employee_indices: tuple[int, ...]
+    fairness_flight_counts: tuple[cp_model.IntVar | None, ...]
+    highest_flight_count: cp_model.IntVar
+    lowest_flight_count: cp_model.IntVar
+    flight_count_spread: cp_model.IntVar
+    pairwise_flight_count_differences: tuple[cp_model.IntVar, ...]
+    total_pairwise_flight_count_difference: cp_model.IntVar
 
 
 @dataclass(frozen=True, slots=True)
@@ -75,7 +83,7 @@ class _ObjectiveStage:
 def optimize_flight_assignments(
     day: OperationalDay, config: OptimizerConfig | None = None
 ) -> OptimizationResult:
-    """Optimize staffing, crew qualifications, and required breaks."""
+    """Optimize operations, required breaks, then raw flight-count fairness."""
 
     active_config = config or OptimizerConfig()
     started_at = monotonic()
@@ -301,6 +309,21 @@ def _build_model(
         fixed_employee_indices,
         facts,
     )
+    (
+        fairness_employee_indices,
+        fairness_flight_counts,
+        highest_flight_count,
+        lowest_flight_count,
+        flight_count_spread,
+        pairwise_flight_count_differences,
+        total_pairwise_flight_count_difference,
+    ) = _add_fairness_model(
+        model,
+        day,
+        decisions,
+        fixed_employee_indices,
+        included_employee_indices,
+    )
 
     return _ModelData(
         model=model,
@@ -331,6 +354,17 @@ def _build_model(
         break_achieved=break_achieved,
         known_unsatisfied_break=known_unsatisfied_break,
         break_gap_variables=break_gap_variables,
+        fairness_employee_indices=fairness_employee_indices,
+        fairness_flight_counts=fairness_flight_counts,
+        highest_flight_count=highest_flight_count,
+        lowest_flight_count=lowest_flight_count,
+        flight_count_spread=flight_count_spread,
+        pairwise_flight_count_differences=(
+            pairwise_flight_count_differences
+        ),
+        total_pairwise_flight_count_difference=(
+            total_pairwise_flight_count_difference
+        ),
     )
 
 
@@ -551,6 +585,130 @@ def _assignment_values_by_employee(
     return tuple(values)
 
 
+def _add_fairness_model(
+    model: cp_model.CpModel,
+    day: OperationalDay,
+    decisions: dict[tuple[int, int], cp_model.IntVar],
+    fixed_employee_indices: tuple[tuple[int, ...], ...],
+    included_employee_indices: tuple[int, ...],
+) -> tuple[
+    tuple[int, ...],
+    tuple[cp_model.IntVar | None, ...],
+    cp_model.IntVar,
+    cp_model.IntVar,
+    cp_model.IntVar,
+    tuple[cp_model.IntVar, ...],
+    cp_model.IntVar,
+]:
+    """Add exact raw-count extrema and employee-pair differences."""
+
+    fixed_counts = [0 for _ in day.employees]
+    for employee_indices in fixed_employee_indices:
+        for employee_index in employee_indices:
+            fixed_counts[employee_index] += 1
+
+    employee_indices_with_candidates = {
+        employee_index for employee_index, _ in decisions
+    }
+    employee_indices_with_fixed = {
+        employee_index
+        for employee_index, fixed_count in enumerate(fixed_counts)
+        if fixed_count
+    }
+    possible_participants = (
+        employee_indices_with_candidates | employee_indices_with_fixed
+    )
+    fairness_employee_indices = tuple(
+        employee_index
+        for employee_index in included_employee_indices
+        if employee_index in possible_participants
+    )
+    fairness_employee_set = set(fairness_employee_indices)
+
+    fairness_flight_counts: list[cp_model.IntVar | None] = []
+    participating_counts: list[cp_model.IntVar] = []
+    maximum_possible_count = len(day.flights)
+    for employee_index in range(len(day.employees)):
+        if employee_index not in fairness_employee_set:
+            fairness_flight_counts.append(None)
+            continue
+        employee_decisions = [
+            decision
+            for (candidate_employee_index, _), decision in decisions.items()
+            if candidate_employee_index == employee_index
+        ]
+        flight_count = model.new_int_var(
+            fixed_counts[employee_index],
+            maximum_possible_count,
+            f"raw_flight_count_e{employee_index}",
+        )
+        model.add(
+            flight_count
+            == fixed_counts[employee_index] + sum(employee_decisions)
+        )
+        fairness_flight_counts.append(flight_count)
+        participating_counts.append(flight_count)
+
+    highest_flight_count = model.new_int_var(
+        0,
+        maximum_possible_count,
+        "highest_raw_flight_count",
+    )
+    lowest_flight_count = model.new_int_var(
+        0,
+        maximum_possible_count,
+        "lowest_raw_flight_count",
+    )
+    if participating_counts:
+        model.add_max_equality(highest_flight_count, participating_counts)
+        model.add_min_equality(lowest_flight_count, participating_counts)
+    else:
+        model.add(highest_flight_count == 0)
+        model.add(lowest_flight_count == 0)
+
+    flight_count_spread = model.new_int_var(
+        0,
+        maximum_possible_count,
+        "raw_flight_count_spread",
+    )
+    model.add(
+        flight_count_spread
+        == highest_flight_count - lowest_flight_count
+    )
+
+    pairwise_differences: list[cp_model.IntVar] = []
+    for pair_index, (left, right) in enumerate(
+        combinations(participating_counts, 2)
+    ):
+        difference = model.new_int_var(
+            0,
+            maximum_possible_count,
+            f"pairwise_raw_flight_count_difference_{pair_index}",
+        )
+        model.add_abs_equality(difference, left - right)
+        pairwise_differences.append(difference)
+
+    maximum_total_pairwise_difference = (
+        len(pairwise_differences) * maximum_possible_count
+    )
+    total_pairwise_difference = model.new_int_var(
+        0,
+        maximum_total_pairwise_difference,
+        "total_pairwise_raw_flight_count_difference",
+    )
+    model.add(total_pairwise_difference == sum(pairwise_differences))
+
+    return (
+        fairness_employee_indices,
+        tuple(fairness_flight_counts),
+        highest_flight_count,
+        lowest_flight_count,
+        flight_count_spread,
+        tuple(pairwise_differences),
+        total_pairwise_difference,
+    )
+
+
 def _one_eligible_shift_contains_assignment_span(
     employee: Employee,
     day: OperationalDay,
@@ -730,6 +888,16 @@ def _objective_stages(model_data: _ModelData) -> tuple[_ObjectiveStage, ...]:
             "partial_crew_individual_qualification_coverage",
             True,
             sum(model_data.partial_crew_qualification_coverage),
+        ),
+        _ObjectiveStage(
+            "raw_flight_count_spread",
+            False,
+            model_data.flight_count_spread,
+        ),
+        _ObjectiveStage(
+            "total_pairwise_flight_count_difference",
+            False,
+            model_data.total_pairwise_flight_count_difference,
         ),
     )
 
@@ -1040,12 +1208,58 @@ def _build_result(
             )
         )
 
+    fairness_counts = tuple(
+        sum(
+            employee_index in assigned_employee_indices
+            for assigned_employee_indices in assigned_by_flight
+        )
+        for employee_index in model_data.fairness_employee_indices
+    )
+    for employee_index, flight_count in zip(
+        model_data.fairness_employee_indices,
+        fairness_counts,
+    ):
+        modeled_count = model_data.fairness_flight_counts[employee_index]
+        assert modeled_count is not None
+        assert solver.value(modeled_count) == flight_count
+
+    highest_flight_count = max(fairness_counts, default=0)
+    lowest_flight_count = min(fairness_counts, default=0)
+    flight_count_spread = highest_flight_count - lowest_flight_count
+    total_pairwise_difference = sum(
+        abs(left - right)
+        for left, right in combinations(fairness_counts, 2)
+    )
+    assert solver.value(model_data.highest_flight_count) == highest_flight_count
+    assert solver.value(model_data.lowest_flight_count) == lowest_flight_count
+    assert solver.value(model_data.flight_count_spread) == flight_count_spread
+    assert (
+        solver.value(model_data.total_pairwise_flight_count_difference)
+        == total_pairwise_difference
+    )
+    total_assignments = sum(fairness_counts)
+    participating_employee_count = len(fairness_counts)
+    fairness_metrics = FairnessMetrics(
+        participating_employee_count=participating_employee_count,
+        total_assignments=total_assignments,
+        average_flights=(
+            total_assignments / participating_employee_count
+            if participating_employee_count
+            else 0.0
+        ),
+        highest_flight_count=highest_flight_count,
+        lowest_flight_count=lowest_flight_count,
+        flight_count_spread=flight_count_spread,
+        maximum_consecutive_streak=None,
+        adjusted_workload_spread=None,
+    )
+
     assert isfinite(runtime)
     return OptimizationResult(
         status=status,
         flight_results=tuple(flight_results),
         employee_results=tuple(employee_results),
-        fairness_metrics=None,
+        fairness_metrics=fairness_metrics,
         attempts=(),
         objective_values=objectives,
         warnings=tuple(all_warnings),

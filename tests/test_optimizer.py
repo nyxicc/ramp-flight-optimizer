@@ -460,6 +460,8 @@ def test_objective_reporting_matches_partial_schedule() -> None:
         "preferred_staffed_flights",
         "total_preferred_shortfall",
         "partial_crew_individual_qualification_coverage",
+        "raw_flight_count_spread",
+        "total_pairwise_flight_count_difference",
     ]
     assert [objective.value for objective in result.objective_values] == [
         0,
@@ -470,6 +472,8 @@ def test_objective_reporting_matches_partial_schedule() -> None:
         0,
         0,
         2,
+        0,
+        0,
         0,
     ]
     assert all(objective.proven_optimal for objective in result.objective_values)
@@ -524,7 +528,15 @@ def test_result_preserves_order_facts_and_marks_future_metrics_unevaluated() -> 
         and item.adjusted_workload is None
         for item in result.employee_results
     )
-    assert result.fairness_metrics is None
+    assert result.fairness_metrics is not None
+    assert result.fairness_metrics.participating_employee_count == 5
+    assert result.fairness_metrics.total_assignments == 9
+    assert result.fairness_metrics.average_flights == 1.8
+    assert result.fairness_metrics.highest_flight_count == 2
+    assert result.fairness_metrics.lowest_flight_count == 1
+    assert result.fairness_metrics.flight_count_spread == 1
+    assert result.fairness_metrics.maximum_consecutive_streak is None
+    assert result.fairness_metrics.adjusted_workload_spread is None
     assert result.attempts == ()
     assert result.emergency_lead_staffing_used is None
     assert day == original_day
@@ -548,7 +560,16 @@ def test_empty_day_and_no_employee_day_return_optimal_results() -> None:
         0,
         0,
         0,
+        0,
+        0,
     ]
+    assert empty.fairness_metrics is not None
+    assert empty.fairness_metrics.participating_employee_count == 0
+    assert empty.fairness_metrics.total_assignments == 0
+    assert empty.fairness_metrics.average_flights == 0.0
+    assert empty.fairness_metrics.highest_flight_count == 0
+    assert empty.fairness_metrics.lowest_flight_count == 0
+    assert empty.fairness_metrics.flight_count_spread == 0
     assert no_employees.status is OptimizationStatus.OPTIMAL
     assert no_employees.flight_results[0].minimum_shortfall == 3
 

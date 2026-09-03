@@ -12,6 +12,7 @@ from ramp_optimizer import (
     EligibilityReason,
     Employee,
     EmployeeShift,
+    FairnessMetrics,
     FixedAssignment,
     Flight,
     OperationalDay,
@@ -151,3 +152,19 @@ def test_break_status_vocabulary_matches_approved_reporting() -> None:
     )
     assert BreakStatus.SATISFIED.value == "SATISFIED"
     assert BreakStatus.UNSATISFIED.value == "UNSATISFIED"
+
+
+def test_future_fairness_metrics_can_remain_explicitly_unevaluated() -> None:
+    metrics = FairnessMetrics(
+        participating_employee_count=2,
+        total_assignments=3,
+        average_flights=1.5,
+        highest_flight_count=2,
+        lowest_flight_count=1,
+        flight_count_spread=1,
+        maximum_consecutive_streak=None,
+        adjusted_workload_spread=None,
+    )
+
+    assert metrics.maximum_consecutive_streak is None
+    assert metrics.adjusted_workload_spread is None

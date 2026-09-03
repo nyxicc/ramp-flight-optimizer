@@ -214,8 +214,8 @@ class FairnessMetrics:
     highest_flight_count: int
     lowest_flight_count: int
     flight_count_spread: int
-    maximum_consecutive_streak: int
-    adjusted_workload_spread: float
+    maximum_consecutive_streak: int | None
+    adjusted_workload_spread: float | None
 
 
 @dataclass(frozen=True, slots=True)

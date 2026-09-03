@@ -5,7 +5,7 @@ from synthetic operational data.
 
 ## Current scope
 
-Milestones 1-6 are implemented. The repository currently provides:
+Milestones 1-7 are implemented. The repository currently provides:
 
 - immutable employee, shift, flight, and result domain models;
 - structured input validation;
@@ -16,10 +16,10 @@ Milestones 1-6 are implemented. The repository currently provides:
 - pure half-open interval overlap behavior;
 - explainable employee-flight eligibility and validated candidate preprocessing;
 - a limited CP-SAT optimizer for staffing, push and close-out qualification
-  coverage, and required between-assignment breaks.
+  coverage, required between-assignment breaks, and raw flight-count fairness.
 
-Fairness, workload scoring, streak penalties, continuity, and emergency Lead
-solving are not implemented yet.
+Shift-adjusted and weighted workload scoring, streak penalties, continuity, and
+emergency Lead solving are not implemented yet.
 
 ## Employee and availability model
 
@@ -223,7 +223,7 @@ assert normal.maximum == 4
 assert heavy.maximum == 5
 ```
 
-## Staffing, qualification, and break optimizer
+## Staffing, qualification, break, and fairness optimizer
 
 `optimize_flight_assignments()` is the primary limited CP-SAT scheduling entry
 point. `optimize_minimum_staffing()` remains available as a backward-compatible
@@ -284,7 +284,7 @@ in stable employee order.
 Minimum staffing, qualification coverage, and break coverage are recoverable
 rather than hard constraints, so a constrained day still returns its best
 partial schedule with critical warnings for every known shortage. The optimizer
-uses nine sequential integer objective stages:
+uses eleven sequential integer objective stages:
 
 1. Maximize flights reaching minimum staffing.
 2. Maximize minimum-staffed departures and turns covering both qualifications.
@@ -296,7 +296,10 @@ uses nine sequential integer objective stages:
 7. Maximize flights reaching preferred staffing.
 8. Minimize total preferred-staffing shortfall.
 9. Maximize separate qualification coverage on below-minimum partial crews as
-   a final tie-breaker.
+   the final operational tie-breaker.
+10. Minimize the raw flight-count spread among fairness participants.
+11. Minimize the total pairwise absolute flight-count difference among those
+    participants.
 
 The exact formulation uses one break stage rather than redundant achieved and
 unsatisfied stages. Minimizing known unsatisfied breaks improves employees with
@@ -304,6 +307,35 @@ two or more assignments without rewarding extra flights merely to convert a
 non-evaluable employee into a satisfied one. Break optimization occurs after
 all minimum-staffing and high-priority qualification outcomes are fixed, but
 before preferred staffing.
+
+### Raw flight-count fairness
+
+Fairness is evaluated only after all nine staffing, qualification, break, and
+preferred-staffing outcomes are fixed. Its population contains each enabled
+employee with at least one ordinary `RAMP_AGENT` shift who had at least one
+legal assignment opportunity before solving or at least one fixed assignment.
+An employee stays in this population even when the final result assigns them
+zero flights.
+Disabled employees, Leads excluded from the ordinary pass, non-ramp and unknown
+roles, employees without a shift, and employees with neither an opportunity nor
+a fixed assignment are excluded. Population order follows the input employee
+order.
+
+The model counts each selected or fixed aircraft movement once. Arrival-only,
+departure-only, and turn movements therefore each add one; a turn's two flight
+numbers do not make it two assignments. For every participant, the exact count
+is the fixed-assignment count plus selected candidate variables. Exact maximum
+and minimum equalities define the raw count spread. Stage 10 minimizes that
+spread, then stage 11 minimizes the sum of absolute count differences over all
+unordered employee pairs, which resolves avoidable middle-of-the-distribution
+imbalance without floating-point solver expressions. Zero- and one-participant
+populations both have a zero spread and zero pairwise difference.
+
+Idle time and utilization are not objectives. Fairness cannot add staffing
+beyond the already-fixed preferred outcome, and it never makes an illegal
+assignment. Raw counts are not normalized for shift length or opportunity
+count, and Express flights, three-person crews, duration, direction, heavy
+status, and qualifications carry no fairness weight in this milestone.
 
 Each proven optimum is fixed before solving the next stage. Sequential solves
 preserve true priority without arbitrary giant weights, and all stages share
@@ -332,16 +364,24 @@ with minimum-staffing and employee break warnings.
 `OptimizationResult.employee_results` contains ordinary enabled Ramp Agents in
 stable employee order. Each result reports chronologically ordered assignments,
 raw total, Mainline, Express, and three-person-flight counts, plus break status.
-These counts are descriptive and are not fairness or workload objectives.
+The raw total is the count used by Milestone 7 fairness for employees in its
+population; Mainline, Express, and three-person counts remain descriptive.
 `longest_consecutive_streak` and `adjusted_workload` are explicitly `None`
-because their later milestones have not been implemented. Fairness remains
-`None`. Leads and unrelated roles are excluded from ordinary employee results,
-and emergency Lead configuration does not enable a second solver pass.
+because their later milestones have not been implemented. Leads and unrelated
+roles are excluded from ordinary employee results, and emergency Lead
+configuration does not enable a second solver pass.
 
-This optimizer is not operationally complete: it does not evaluate fairness,
-shift-length targets, workload weighting, streaks or streak penalties, team
-continuity, or an emergency Lead second pass. Those capabilities remain for
-Milestone 7 and later.
+`OptimizationResult.fairness_metrics` reports the fairness population size,
+total and average assignment counts, highest and lowest counts, and their
+spread. These values are reconstructed from the final assignments. Its
+`maximum_consecutive_streak` and `adjusted_workload_spread` fields remain
+explicitly `None`.
+
+This optimizer is not operationally complete. It does not implement Milestone
+8 shift-length adjustment, Milestone 9 Express and three-person workload
+adjustment, Milestone 10 consecutive-flight penalties, Milestone 11 team
+continuity, Milestone 12 emergency Lead solving, or later reporting and
+integration milestones.
 
 ## TeamWork schedule import
 

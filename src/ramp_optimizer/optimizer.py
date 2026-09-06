@@ -1,4 +1,4 @@
-"""Milestone 9 optimizer with raw-count, shift, and workload fairness."""
+"""Milestone 10 optimizer with operational and layered fairness objectives."""
 
 from dataclasses import dataclass
 from datetime import datetime, timedelta
@@ -78,6 +78,11 @@ class _ModelData:
     flight_count_spread: cp_model.IntVar
     pairwise_flight_count_differences: tuple[cp_model.IntVar, ...]
     total_pairwise_flight_count_difference: cp_model.IntVar
+    streak_predecessor_arcs: dict[tuple[int, int, int], cp_model.IntVar]
+    streak_run_lengths: dict[tuple[int, int], cp_model.IntVar]
+    employee_longest_streaks: tuple[cp_model.IntVar | None, ...]
+    maximum_consecutive_flight_streak: cp_model.IntVar
+    total_employee_longest_streaks: cp_model.IntVar
     fairness_shift_minutes: tuple[int | None, ...]
     total_fairness_shift_minutes: int
     total_fairness_assignment_count: cp_model.IntVar
@@ -103,7 +108,7 @@ class _ObjectiveStage:
 def optimize_flight_assignments(
     day: OperationalDay, config: OptimizerConfig | None = None
 ) -> OptimizationResult:
-    """Optimize operations, then raw, shift-length, and workload fairness."""
+    """Optimize operations, then raw, streak, shift, and workload fairness."""
 
     active_config = config or OptimizerConfig()
     started_at = monotonic()
@@ -345,6 +350,21 @@ def _build_model(
         included_employee_indices,
     )
     (
+        streak_predecessor_arcs,
+        streak_run_lengths,
+        employee_longest_streaks,
+        maximum_consecutive_flight_streak,
+        total_employee_longest_streaks,
+    ) = _add_consecutive_streak_model(
+        model,
+        day,
+        config,
+        decisions,
+        fixed_employee_indices,
+        facts,
+        fairness_employee_indices,
+    )
+    (
         fairness_shift_minutes,
         total_fairness_shift_minutes,
         total_fairness_assignment_count,
@@ -417,6 +437,13 @@ def _build_model(
         total_pairwise_flight_count_difference=(
             total_pairwise_flight_count_difference
         ),
+        streak_predecessor_arcs=streak_predecessor_arcs,
+        streak_run_lengths=streak_run_lengths,
+        employee_longest_streaks=employee_longest_streaks,
+        maximum_consecutive_flight_streak=(
+            maximum_consecutive_flight_streak
+        ),
+        total_employee_longest_streaks=total_employee_longest_streaks,
         fairness_shift_minutes=fairness_shift_minutes,
         total_fairness_shift_minutes=total_fairness_shift_minutes,
         total_fairness_assignment_count=total_fairness_assignment_count,
@@ -788,6 +815,215 @@ def _add_fairness_model(
     )
 
 
+def _add_consecutive_streak_model(
+    model: cp_model.CpModel,
+    day: OperationalDay,
+    config: OptimizerConfig,
+    decisions: dict[tuple[int, int], cp_model.IntVar],
+    fixed_employee_indices: tuple[tuple[int, ...], ...],
+    facts: tuple[FlightOperationalFacts, ...],
+    fairness_employee_indices: tuple[int, ...],
+) -> tuple[
+    dict[tuple[int, int, int], cp_model.IntVar],
+    dict[tuple[int, int], cp_model.IntVar],
+    tuple[cp_model.IntVar | None, ...],
+    cp_model.IntVar,
+    cp_model.IntVar,
+]:
+    """Add exact per-shift consecutive-flight streak variables.
+
+    Immediate-predecessor arcs are only created for pairs whose static gap is
+    below the reset threshold. Prefix assignment counts make the intervening
+    assignment test constant-size, keeping the formulation quadratic in each
+    employee shift's possible assignments.
+    """
+
+    assignment_values = _assignment_values_by_employee(
+        day,
+        decisions,
+        fixed_employee_indices,
+    )
+    fairness_employee_set = set(fairness_employee_indices)
+    predecessor_arcs: dict[tuple[int, int, int], cp_model.IntVar] = {}
+    run_lengths: dict[tuple[int, int], cp_model.IntVar] = {}
+    employee_longest_streaks: list[cp_model.IntVar | None] = []
+    participating_longest_streaks: list[cp_model.IntVar] = []
+    reset_duration = timedelta(minutes=config.consecutive_reset_minutes)
+    maximum_possible_streak = len(day.flights)
+
+    for employee_index, employee in enumerate(day.employees):
+        if employee_index not in fairness_employee_set:
+            employee_longest_streaks.append(None)
+            continue
+
+        assignments_by_shift: dict[int, list[int]] = {}
+        for flight_index in assignment_values[employee_index]:
+            shift_index = _eligible_shift_index_for_assignment(
+                employee,
+                day,
+                config,
+                facts[flight_index].work_start,
+                facts[flight_index].work_end,
+            )
+            assignments_by_shift.setdefault(shift_index, []).append(
+                flight_index
+            )
+
+        employee_run_lengths: list[cp_model.IntVar] = []
+        for shift_index, flight_indices in assignments_by_shift.items():
+            ordered_flight_indices = sorted(
+                flight_indices,
+                key=lambda flight_index: (
+                    facts[flight_index].work_start,
+                    facts[flight_index].work_end,
+                    flight_index,
+                ),
+            )
+            group_size = len(ordered_flight_indices)
+
+            for flight_index in ordered_flight_indices:
+                run_length = model.new_int_var(
+                    0,
+                    group_size,
+                    f"consecutive_run_e{employee_index}_f{flight_index}",
+                )
+                run_lengths[(employee_index, flight_index)] = run_length
+                employee_run_lengths.append(run_length)
+
+            prefix_counts: list[cp_model.IntVar | int] = [0]
+            for position, flight_index in enumerate(
+                ordered_flight_indices,
+                start=1,
+            ):
+                prefix_count = model.new_int_var(
+                    0,
+                    position,
+                    (
+                        f"streak_prefix_e{employee_index}_s{shift_index}"
+                        f"_p{position}"
+                    ),
+                )
+                model.add(
+                    prefix_count
+                    == prefix_counts[-1]
+                    + assignment_values[employee_index][flight_index]
+                )
+                prefix_counts.append(prefix_count)
+
+            incoming_arcs: dict[
+                int, list[tuple[int, cp_model.IntVar]]
+            ] = {flight_index: [] for flight_index in ordered_flight_indices}
+            for later_position, later_flight_index in enumerate(
+                ordered_flight_indices
+            ):
+                later_fact = facts[later_flight_index]
+                for earlier_position in range(later_position):
+                    earlier_flight_index = ordered_flight_indices[
+                        earlier_position
+                    ]
+                    earlier_fact = facts[earlier_flight_index]
+                    if (
+                        later_fact.work_start - earlier_fact.work_end
+                        >= reset_duration
+                    ):
+                        continue
+
+                    intervening_assignment_count = (
+                        prefix_counts[later_position]
+                        - prefix_counts[earlier_position + 1]
+                    )
+                    arc = _add_exact_gap_indicator(
+                        model,
+                        assignment_values[employee_index][
+                            earlier_flight_index
+                        ],
+                        assignment_values[employee_index][later_flight_index],
+                        intervening_assignment_count,
+                        (
+                            f"streak_predecessor_e{employee_index}"
+                            f"_f{earlier_flight_index}_f{later_flight_index}"
+                        ),
+                    )
+                    predecessor_arcs[
+                        (
+                            employee_index,
+                            earlier_flight_index,
+                            later_flight_index,
+                        )
+                    ] = arc
+                    incoming_arcs[later_flight_index].append(
+                        (earlier_flight_index, arc)
+                    )
+
+            for flight_index in ordered_flight_indices:
+                presence = assignment_values[employee_index][flight_index]
+                run_length = run_lengths[(employee_index, flight_index)]
+                incoming = incoming_arcs[flight_index]
+                starts_streak = model.new_bool_var(
+                    f"starts_streak_e{employee_index}_f{flight_index}"
+                )
+                model.add(
+                    starts_streak + sum(arc for _, arc in incoming)
+                    == presence
+                )
+                if not isinstance(presence, int):
+                    model.add(run_length == 0).only_enforce_if(
+                        presence.Not()
+                    )
+                model.add(run_length == 1).only_enforce_if(starts_streak)
+                for earlier_flight_index, arc in incoming:
+                    model.add(
+                        run_length
+                        == run_lengths[
+                            (employee_index, earlier_flight_index)
+                        ]
+                        + 1
+                    ).only_enforce_if(arc)
+
+        longest_streak = model.new_int_var(
+            0,
+            maximum_possible_streak,
+            f"longest_consecutive_streak_e{employee_index}",
+        )
+        if employee_run_lengths:
+            model.add_max_equality(longest_streak, employee_run_lengths)
+        else:
+            model.add(longest_streak == 0)
+        employee_longest_streaks.append(longest_streak)
+        participating_longest_streaks.append(longest_streak)
+
+    maximum_consecutive_flight_streak = model.new_int_var(
+        0,
+        maximum_possible_streak,
+        "maximum_consecutive_flight_streak",
+    )
+    if participating_longest_streaks:
+        model.add_max_equality(
+            maximum_consecutive_flight_streak,
+            participating_longest_streaks,
+        )
+    else:
+        model.add(maximum_consecutive_flight_streak == 0)
+
+    total_employee_longest_streaks = model.new_int_var(
+        0,
+        len(participating_longest_streaks) * maximum_possible_streak,
+        "total_employee_longest_streaks",
+    )
+    model.add(
+        total_employee_longest_streaks
+        == sum(participating_longest_streaks)
+    )
+
+    return (
+        predecessor_arcs,
+        run_lengths,
+        tuple(employee_longest_streaks),
+        maximum_consecutive_flight_streak,
+        total_employee_longest_streaks,
+    )
+
+
 def _add_shift_length_adjustment_model(
     model: cp_model.CpModel,
     day: OperationalDay,
@@ -1103,6 +1339,30 @@ def _one_eligible_shift_contains_assignment_span(
     )
 
 
+def _eligible_shift_index_for_assignment(
+    employee: Employee,
+    day: OperationalDay,
+    config: OptimizerConfig,
+    span_start: datetime,
+    span_end: datetime,
+) -> int:
+    """Return the unique eligible shift containing an assignment window."""
+
+    eligible_shifts = eligible_shifts_for_interval(
+        employee,
+        day.employee_shifts,
+        span_start,
+        span_end,
+        include_leads=False,
+        allow_trainees=config.allow_trainees_for_assignments,
+        allow_possible_ramp_support=(
+            config.allow_possible_ramp_support_for_assignments
+        ),
+    )
+    assert len(eligible_shifts) == 1
+    return day.employee_shifts.index(eligible_shifts[0])
+
+
 def _add_exact_gap_indicator(
     model: cp_model.CpModel,
     earlier_assigned: cp_model.IntVar | int,
@@ -1284,6 +1544,16 @@ def _objective_stages(model_data: _ModelData) -> tuple[_ObjectiveStage, ...]:
             "total_pairwise_flight_count_difference",
             False,
             model_data.total_pairwise_flight_count_difference,
+        ),
+        _ObjectiveStage(
+            "maximum_consecutive_flight_streak",
+            False,
+            model_data.maximum_consecutive_flight_streak,
+        ),
+        _ObjectiveStage(
+            "total_employee_longest_streaks",
+            False,
+            model_data.total_employee_longest_streaks,
         ),
         _ObjectiveStage(
             "total_shift_adjusted_flight_count_deviation",
@@ -1626,7 +1896,30 @@ def _build_result(
         == total_pairwise_adjusted_workload_difference
     )
 
+    modeled_runs_by_employee: dict[
+        int, list[tuple[int, cp_model.IntVar]]
+    ] = {}
+    for (
+        employee_index,
+        flight_index,
+    ), modeled_run_length in model_data.streak_run_lengths.items():
+        modeled_runs_by_employee.setdefault(employee_index, []).append(
+            (flight_index, modeled_run_length)
+        )
+    modeled_arcs_by_employee: dict[
+        int, list[tuple[int, int, cp_model.IntVar]]
+    ] = {}
+    for (
+        employee_index,
+        earlier_flight_index,
+        later_flight_index,
+    ), modeled_arc in model_data.streak_predecessor_arcs.items():
+        modeled_arcs_by_employee.setdefault(employee_index, []).append(
+            (earlier_flight_index, later_flight_index, modeled_arc)
+        )
+
     employee_results: list[EmployeeScheduleResult] = []
+    longest_streaks_by_employee: dict[int, int] = {}
     for employee_index in model_data.included_employee_indices:
         assigned_flight_indices = tuple(
             flight_index
@@ -1645,6 +1938,44 @@ def _build_result(
                 ),
             )
         )
+        (
+            longest_consecutive_streak,
+            streak_run_lengths,
+            streak_predecessors,
+        ) = _derive_consecutive_streaks(
+            day,
+            config,
+            model_data.facts,
+            employee_index,
+            ordered_flight_indices,
+        )
+        longest_streaks_by_employee[employee_index] = (
+            longest_consecutive_streak
+        )
+        modeled_longest_streak = model_data.employee_longest_streaks[
+            employee_index
+        ]
+        if modeled_longest_streak is not None:
+            assert (
+                solver.value(modeled_longest_streak)
+                == longest_consecutive_streak
+            )
+        for flight_index, modeled_run_length in modeled_runs_by_employee.get(
+            employee_index,
+            (),
+        ):
+            assert solver.value(modeled_run_length) == (
+                streak_run_lengths.get(flight_index, 0)
+            )
+        for (
+            earlier_flight_index,
+            later_flight_index,
+            modeled_arc,
+        ) in modeled_arcs_by_employee.get(employee_index, ()):
+            assert bool(solver.value(modeled_arc)) is (
+                streak_predecessors.get(later_flight_index)
+                == earlier_flight_index
+            )
         break_status = _derive_break_status(
             day,
             config,
@@ -1707,7 +2038,7 @@ def _build_result(
                     flight_results[flight_index].staffing_count == 3
                     for flight_index in ordered_flight_indices
                 ),
-                longest_consecutive_streak=None,
+                longest_consecutive_streak=longest_consecutive_streak,
                 break_status=break_status,
                 adjusted_workload=workload_units_to_public_value(
                     adjusted_units_by_employee[employee_index],
@@ -1741,6 +2072,18 @@ def _build_result(
         solver.value(model_data.total_pairwise_flight_count_difference)
         == total_pairwise_difference
     )
+    fairness_streaks = tuple(
+        longest_streaks_by_employee[employee_index]
+        for employee_index in model_data.fairness_employee_indices
+    )
+    maximum_consecutive_streak = max(fairness_streaks, default=0)
+    assert (
+        solver.value(model_data.maximum_consecutive_flight_streak)
+        == maximum_consecutive_streak
+    )
+    assert solver.value(model_data.total_employee_longest_streaks) == sum(
+        fairness_streaks
+    )
     participating_employee_count = len(fairness_counts)
     fairness_metrics = FairnessMetrics(
         participating_employee_count=participating_employee_count,
@@ -1753,7 +2096,7 @@ def _build_result(
         highest_flight_count=highest_flight_count,
         lowest_flight_count=lowest_flight_count,
         flight_count_spread=flight_count_spread,
-        maximum_consecutive_streak=None,
+        maximum_consecutive_streak=maximum_consecutive_streak,
         adjusted_workload_spread=workload_units_to_public_value(
             adjusted_workload_spread_units,
             config,
@@ -1811,6 +2154,63 @@ def _derive_break_status(
         ):
             return BreakStatus.SATISFIED
     return BreakStatus.UNSATISFIED
+
+
+def _derive_consecutive_streaks(
+    day: OperationalDay,
+    config: OptimizerConfig,
+    facts: tuple[FlightOperationalFacts, ...],
+    employee_index: int,
+    assigned_flight_indices: tuple[int, ...],
+) -> tuple[int, dict[int, int], dict[int, int]]:
+    """Reconstruct per-flight runs and immediate predecessors by shift."""
+
+    employee = day.employees[employee_index]
+    assignments_by_shift: dict[int, list[int]] = {}
+    for flight_index in assigned_flight_indices:
+        shift_index = _eligible_shift_index_for_assignment(
+            employee,
+            day,
+            config,
+            facts[flight_index].work_start,
+            facts[flight_index].work_end,
+        )
+        assignments_by_shift.setdefault(shift_index, []).append(flight_index)
+
+    reset_duration = timedelta(minutes=config.consecutive_reset_minutes)
+    run_lengths: dict[int, int] = {}
+    predecessors: dict[int, int] = {}
+    longest_streak = 0
+    for flight_indices in assignments_by_shift.values():
+        ordered_flight_indices = sorted(
+            flight_indices,
+            key=lambda flight_index: (
+                facts[flight_index].work_start,
+                facts[flight_index].work_end,
+                flight_index,
+            ),
+        )
+        previous_flight_index: int | None = None
+        current_streak = 0
+        for flight_index in ordered_flight_indices:
+            if previous_flight_index is None:
+                current_streak = 1
+            else:
+                previous_fact = facts[previous_flight_index]
+                current_fact = facts[flight_index]
+                if (
+                    current_fact.work_start - previous_fact.work_end
+                    >= reset_duration
+                ):
+                    current_streak = 1
+                else:
+                    current_streak += 1
+                    predecessors[flight_index] = previous_flight_index
+            run_lengths[flight_index] = current_streak
+            longest_streak = max(longest_streak, current_streak)
+            previous_flight_index = flight_index
+
+    return longest_streak, run_lengths, predecessors
 
 
 def _empty_solver_result(

@@ -296,8 +296,8 @@ def test_two_mainline_and_two_express_flights_balance_one_of_each() -> None:
     assert all(item.express_flight_count == 1 for item in result.employee_results)
     assert all(item.adjusted_workload == 1.8 for item in result.employee_results)
     assert result.objective_values[9].value == 0
-    assert result.objective_values[12].value == 0
-    assert result.objective_values[13].value == 0
+    assert result.objective_values[14].value == 0
+    assert result.objective_values[15].value == 0
 
 
 def test_three_person_work_is_assigned_to_reduce_existing_workload_gap() -> None:
@@ -386,8 +386,8 @@ def test_pairwise_workload_stage_improves_tied_interior_distribution() -> None:
         2.87,
         2.99,
     ]
-    assert result.objective_values[12].value == 3_500
-    assert result.objective_values[13].value == 10_500
+    assert result.objective_values[14].value == 3_500
+    assert result.objective_values[15].value == 10_500
 
 
 def test_workload_never_worsens_raw_count_fairness() -> None:
@@ -428,7 +428,7 @@ def test_workload_never_worsens_shift_length_adjustment() -> None:
     by_id = results_by_id(result)
     assert by_id["LONG"].flight_count == 2
     assert by_id["SHORT"].flight_count == 1
-    assert result.objective_values[11].value == 0
+    assert result.objective_values[13].value == 0
 
 
 def test_workload_stages_preserve_operational_qualification_break_and_preferred() -> None:
@@ -498,12 +498,12 @@ def test_zero_and_one_participant_workload_metrics() -> None:
 
     assert empty.fairness_metrics is not None
     assert empty.fairness_metrics.adjusted_workload_spread == 0.0
-    assert empty.objective_values[12].value == 0
-    assert empty.objective_values[13].value == 0
+    assert empty.objective_values[14].value == 0
+    assert empty.objective_values[15].value == 0
     assert one.fairness_metrics is not None
     assert one.fairness_metrics.adjusted_workload_spread == 0.0
-    assert one.objective_values[12].value == 0
-    assert one.objective_values[13].value == 0
+    assert one.objective_values[14].value == 0
+    assert one.objective_values[15].value == 0
 
 
 def test_participants_with_forced_zero_assignments_have_zero_workload() -> None:
@@ -612,7 +612,7 @@ def test_overnight_express_assignment_reports_workload() -> None:
     assert result.employee_results[0].scheduled_shift_minutes == 180
 
 
-def test_objective_order_appends_workload_stages_after_existing_twelve() -> None:
+def test_objective_order_places_streak_before_shift_and_workload_stages() -> None:
     result = optimize_flight_assignments(OperationalDay(date(2026, 9, 2)))
 
     assert [(item.stage, item.name) for item in result.objective_values] == [
@@ -627,14 +627,16 @@ def test_objective_order_appends_workload_stages_after_existing_twelve() -> None
         (9, "partial_crew_individual_qualification_coverage"),
         (10, "raw_flight_count_spread"),
         (11, "total_pairwise_flight_count_difference"),
-        (12, "total_shift_adjusted_flight_count_deviation"),
-        (13, "adjusted_workload_spread"),
-        (14, "total_pairwise_adjusted_workload_difference"),
+        (12, "maximum_consecutive_flight_streak"),
+        (13, "total_employee_longest_streaks"),
+        (14, "total_shift_adjusted_flight_count_deviation"),
+        (15, "adjusted_workload_spread"),
+        (16, "total_pairwise_adjusted_workload_difference"),
     ]
     assert all(item.proven_optimal for item in result.objective_values)
 
 
-def test_time_budget_exhaustion_before_stage_13_preserves_stage_12(
+def test_time_budget_exhaustion_before_stage_15_preserves_stage_14(
     monkeypatch,
 ) -> None:
     day = day_for(
@@ -647,7 +649,7 @@ def test_time_budget_exhaustion_before_stage_13_preserves_stage_12(
         config,
         build_candidate_assignments(day, config),
     )
-    times = iter([0.0] * 12 + [2.0])
+    times = iter([0.0] * 14 + [2.0])
     monkeypatch.setattr(optimizer_module, "monotonic", lambda: next(times))
 
     status, solver, objectives = optimizer_module._solve_lexicographically(
@@ -658,19 +660,19 @@ def test_time_budget_exhaustion_before_stage_13_preserves_stage_12(
 
     assert status is OptimizationStatus.FEASIBLE
     assert solver is not None
-    assert len(objectives) == 13
-    assert all(item.proven_optimal for item in objectives[:12])
-    assert objectives[12].stage == 13
-    assert objectives[12].proven_optimal is False
+    assert len(objectives) == 15
+    assert all(item.proven_optimal for item in objectives[:14])
+    assert objectives[14].stage == 15
+    assert objectives[14].proven_optimal is False
     assert solver.value(model_data.total_shift_adjusted_deviation) == (
-        objectives[11].value
+        objectives[13].value
     )
 
 
 @pytest.mark.parametrize(
     ("completed_stages", "expected_last_stage"),
-    [(12, 13), (13, 14)],
-    ids=("during-stage-13", "during-stage-14"),
+    [(14, 15), (15, 16)],
+    ids=("during-stage-15", "during-stage-16"),
 )
 def test_workload_stage_timeout_preserves_last_proven_solution(
     monkeypatch,
@@ -708,8 +710,8 @@ def test_workload_stage_timeout_preserves_last_proven_solution(
     )
     assert result.objective_values[-1].stage == expected_last_stage
     assert result.objective_values[-1].proven_optimal is False
-    if completed_stages == 13:
-        assert result.objective_values[12].proven_optimal
+    if completed_stages == 15:
+        assert result.objective_values[14].proven_optimal
 
 
 def test_optimizer_rejects_unrepresentable_workload_policy() -> None:

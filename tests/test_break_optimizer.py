@@ -545,7 +545,7 @@ def test_employee_results_have_stable_order_raw_counts_and_workload() -> None:
         assert item.mainline_flight_count == 1
         assert item.express_flight_count == 1
         assert item.three_person_flight_count == 2
-        assert item.longest_consecutive_streak is None
+        assert item.longest_consecutive_streak == 1
         assert item.adjusted_workload == 2.07
 
 

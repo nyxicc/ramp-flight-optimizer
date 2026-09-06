@@ -154,7 +154,7 @@ def test_break_status_vocabulary_matches_approved_reporting() -> None:
     assert BreakStatus.UNSATISFIED.value == "UNSATISFIED"
 
 
-def test_future_fairness_metrics_can_remain_explicitly_unevaluated() -> None:
+def test_fairness_metrics_keep_workload_optional_but_streak_populated() -> None:
     metrics = FairnessMetrics(
         participating_employee_count=2,
         total_assignments=3,
@@ -162,11 +162,11 @@ def test_future_fairness_metrics_can_remain_explicitly_unevaluated() -> None:
         highest_flight_count=2,
         lowest_flight_count=1,
         flight_count_spread=1,
-        maximum_consecutive_streak=None,
+        maximum_consecutive_streak=0,
         adjusted_workload_spread=None,
     )
 
-    assert metrics.maximum_consecutive_streak is None
+    assert metrics.maximum_consecutive_streak == 0
     assert metrics.adjusted_workload_spread is None
     assert metrics.total_participating_shift_minutes == 0
     assert metrics.total_shift_adjusted_deviation == 0.0

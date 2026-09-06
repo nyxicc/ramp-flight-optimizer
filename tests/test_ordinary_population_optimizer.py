@@ -224,4 +224,4 @@ def test_enabled_configured_role_participates_in_raw_and_shift_fairness(
     assert result.fairness_metrics.total_participating_shift_minutes == 720
     assert result.objective_values[9].value == 1
     assert result.objective_values[10].value == 1
-    assert result.objective_values[11].value == 0
+    assert result.objective_values[13].value == 0

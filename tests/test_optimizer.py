@@ -462,6 +462,8 @@ def test_objective_reporting_matches_partial_schedule() -> None:
         "partial_crew_individual_qualification_coverage",
         "raw_flight_count_spread",
         "total_pairwise_flight_count_difference",
+        "maximum_consecutive_flight_streak",
+        "total_employee_longest_streaks",
         "total_shift_adjusted_flight_count_deviation",
         "adjusted_workload_spread",
         "total_pairwise_adjusted_workload_difference",
@@ -478,6 +480,8 @@ def test_objective_reporting_matches_partial_schedule() -> None:
         0,
         0,
         0,
+        1,
+        2,
         0,
         0,
         0,
@@ -530,7 +534,7 @@ def test_result_preserves_order_facts_and_reports_current_metrics() -> None:
         employee.employee_id for employee in employees
     )
     assert all(
-        item.longest_consecutive_streak is None
+        item.longest_consecutive_streak == 1
         and item.adjusted_workload is not None
         for item in result.employee_results
     )
@@ -541,7 +545,7 @@ def test_result_preserves_order_facts_and_reports_current_metrics() -> None:
     assert result.fairness_metrics.highest_flight_count == 2
     assert result.fairness_metrics.lowest_flight_count == 1
     assert result.fairness_metrics.flight_count_spread == 1
-    assert result.fairness_metrics.maximum_consecutive_streak is None
+    assert result.fairness_metrics.maximum_consecutive_streak == 1
     assert result.fairness_metrics.adjusted_workload_spread is not None
     assert result.attempts == ()
     assert result.emergency_lead_staffing_used is None
@@ -557,6 +561,8 @@ def test_empty_day_and_no_employee_day_return_optimal_results() -> None:
     assert empty.status is OptimizationStatus.OPTIMAL
     assert empty.flight_results == ()
     assert [objective.value for objective in empty.objective_values] == [
+        0,
+        0,
         0,
         0,
         0,

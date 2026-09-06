@@ -199,7 +199,7 @@ class EmployeeScheduleResult:
     mainline_flight_count: int
     express_flight_count: int
     three_person_flight_count: int
-    longest_consecutive_streak: int | None
+    longest_consecutive_streak: int
     break_status: BreakStatus
     adjusted_workload: float | None
     scheduled_shift_minutes: int | None = None
@@ -217,7 +217,7 @@ class FairnessMetrics:
     highest_flight_count: int
     lowest_flight_count: int
     flight_count_spread: int
-    maximum_consecutive_streak: int | None
+    maximum_consecutive_streak: int
     adjusted_workload_spread: float | None
     total_participating_shift_minutes: int = 0
     total_shift_adjusted_deviation: float = 0.0

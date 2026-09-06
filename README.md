@@ -5,7 +5,7 @@ from synthetic operational data.
 
 ## Current scope
 
-Milestones 1-9 are implemented. The repository currently provides:
+Milestones 1-10 are implemented. The repository currently provides:
 
 - immutable employee, shift, flight, and result domain models;
 - structured input validation;
@@ -17,9 +17,9 @@ Milestones 1-9 are implemented. The repository currently provides:
 - explainable employee-flight eligibility and validated candidate preprocessing;
 - a limited CP-SAT optimizer for staffing, push and close-out qualification
   coverage, required between-assignment breaks, raw flight-count fairness, and
-  shift-length and adjusted-workload fairness.
+  consecutive-flight, shift-length, and adjusted-workload fairness.
 
-Consecutive-flight penalties, continuity, emergency Lead solving, and later
+Team continuity, emergency Lead solving, expanded reporting, and later
 integration work are not implemented yet.
 
 ## Employee and availability model
@@ -238,7 +238,8 @@ The hard constraints prevent one employee from working overlapping half-open
 flight windows and cap each flight at the maximum returned by
 `staffing_requirements_for()`. Fixed staffing above that maximum is rejected by
 validation before model construction. No transition time or gate-distance rule
-is applied.
+is applied. Consecutive assignments remain legal; streak length is a soft
+fairness preference, not a hard rest or transition rule.
 
 Departures and turns each require at least one push-qualified employee and at
 least one close-out-qualified employee. One dual-qualified employee may cover
@@ -286,7 +287,7 @@ in stable employee order.
 Minimum staffing, qualification coverage, and break coverage are recoverable
 rather than hard constraints, so a constrained day still returns its best
 partial schedule with critical warnings for every known shortage. The optimizer
-uses fourteen sequential integer objective stages:
+uses sixteen sequential integer objective stages:
 
 1. Maximize flights reaching minimum staffing.
 2. Maximize minimum-staffed departures and turns covering both qualifications.
@@ -302,9 +303,11 @@ uses fourteen sequential integer objective stages:
 10. Minimize the raw flight-count spread among fairness participants.
 11. Minimize the total pairwise absolute flight-count difference among those
     participants.
-12. Minimize total shift-adjusted proportional flight-count deviation.
-13. Minimize adjusted-workload spread.
-14. Minimize total pairwise adjusted-workload difference.
+12. Minimize the maximum consecutive-flight streak across participants.
+13. Minimize the sum of participant longest streaks.
+14. Minimize total shift-adjusted proportional flight-count deviation.
+15. Minimize adjusted-workload spread.
+16. Minimize total pairwise adjusted-workload difference.
 
 The exact formulation uses one break stage rather than redundant achieved and
 unsatisfied stages. Minimizing known unsatisfied breaks improves employees with
@@ -348,14 +351,65 @@ opportunity count. They remain higher priority than the shift-length refinement
 described below. Express flights, three-person crews, flight duration,
 direction, heavy status, and qualifications carry no fairness weight.
 
+### Consecutive-flight streak fairness
+
+Stages 12 and 13 prefer shorter runs only after both raw-count objectives are
+fixed. Within each individual employee shift, final fixed-plus-selected
+assignments are sorted by work start, work end, and stable flight index. Two
+adjacent selected assignments stay in one streak exactly when:
+
+```text
+later work start - earlier work end < consecutive_reset_minutes
+```
+
+The default reset is 40 minutes. Thus a 39-minute gap continues a streak, while
+a gap of exactly 40 minutes or more begins a new one. A zero-minute touching
+gap is legal under half-open interval semantics and continues the streak. Full
+datetimes preserve the same behavior overnight.
+
+Streak length counts `Flight` assignments, not flight numbers or elapsed time.
+An arrival-only movement, departure-only movement, and turn each count once;
+the two directional numbers on a turn do not make it two assignments. Fixed
+assignments participate as selected constants, can connect to optional work,
+and are never removed. An unavoidable fixed or qualification-driven long
+streak remains feasible and is reported normally.
+
+Separate shifts always start separate streak calculations, even when their
+clock gap is shorter than the reset. Each assignment is associated with the
+single eligible shift that fully contains its work window, assignments are
+ordered inside that shift, and the employee result takes the longest run over
+all of their shifts. Existing validation rejects overlapping shifts that could
+make containment ambiguous.
+
+Required breaks and streak resets are intentionally independent. A default
+35-minute gap satisfies the 30-minute required-break rule but remains inside
+the default 40-minute streak. Changing `required_break_minutes` does not alter
+streak classification, and changing `consecutive_reset_minutes` does not alter
+break status.
+
+The CP-SAT formulation is polynomial rather than subset-based or minute-indexed.
+For each participant and shift it builds stable possible-assignment order and
+prefix selected counts. A quadratic set of exact predecessor arcs is created
+only for pairs with a gap below the reset: both endpoints must be assigned and
+the prefix difference must show no selected assignment between them. Each
+selected assignment then has run length `1`, or its continuing predecessor's
+run plus `1`; an unselected assignment has run length `0`. Exact maximum
+equalities produce each participant's longest run and the schedule-wide
+maximum. Stage 12 minimizes that global maximum, and Stage 13 minimizes the sum
+of participant maxima without changing it. Public values are independently
+reconstructed from final assignments and asserted against the solver values.
+
+There is no streak warning, penalty weight, hard maximum, overlap buffer,
+transition-time constraint, or additional break requirement in this milestone.
+
 ### Shift-length adjustment
 
-Stage 12 uses scheduled shift length only to choose among schedules whose first
-11 objective values are already tied. It never worsens raw count spread or
-pairwise count difference. Thus two employees on eight-hour and four-hour
-shifts still receive `3–3` when six assignments can be divided equally. When
-three assignments require a `2–1` split, the longer-shift employee is preferred
-for the extra assignment when every higher priority is tied.
+Stage 14 uses scheduled shift length only to choose among schedules whose first
+13 objective values are already tied. It never worsens raw-count or streak
+fairness. Thus two employees on eight-hour and four-hour shifts still receive
+`3–3` when six assignments can be divided equally. When three assignments
+require a `2–1` split, the longer-shift employee is preferred for the extra
+assignment when every higher priority, including streak behavior, is tied.
 
 Scheduled minutes come from full `EmployeeShift.end - EmployeeShift.start`
 differences. Separate allowed shifts are summed without merging them or counting
@@ -392,7 +446,7 @@ a longer shift; they are never removed or discounted. Zero participants, one
 participant, and zero participant assignments all produce zero scaled
 deviation.
 
-Idle time remains cost-free, utilization is not maximized, and stage 12 cannot
+Idle time remains cost-free, utilization is not maximized, and stage 14 cannot
 create staffing beyond the already-fixed preferred outcome or make an otherwise
 illegal assignment. There are no shift-imbalance warnings. Shift length is not
 an opportunity normalization: candidate count, flight density, qualifications,
@@ -400,13 +454,13 @@ and nonoverlapping assignment combinations do not change the target.
 
 ### Adjusted-workload fairness
 
-Stages 13 and 14 are a secondary refinement after raw flight-count fairness and
-the shift-length adjustment have both been fixed. Stage 13 minimizes the spread
-between the highest and lowest adjusted workload. Stage 14 then minimizes total
+Stages 15 and 16 are a secondary refinement after raw flight-count, streak, and
+shift-length fairness have all been fixed. Stage 15 minimizes the spread
+between the highest and lowest adjusted workload. Stage 16 then minimizes total
 pairwise adjusted-workload difference, resolving avoidable imbalance in the
 middle of a population without changing any earlier optimum. Adjusted workload
 therefore cannot exchange a `3–3` raw assignment distribution for `4–2`, and it
-cannot worsen the Stage 12 proportional shift-length result.
+cannot worsen the Stage 14 proportional shift-length result.
 
 The default synthetic workload assumptions are:
 
@@ -446,6 +500,9 @@ three-person minimum, then the remaining two employees reduce total shortage
 on the other flight. Such a partial schedule can still be mathematically
 `OPTIMAL`. If a later objective times out or returns `UNKNOWN`, the last known
 feasible schedule is retained and returned with non-optimal objective metadata.
+This applies at both streak stages and at later refinements: all previously
+proven raw-count or streak optima remain fixed, and public streak values are
+reconstructed from whichever retained schedule is returned.
 
 ```python
 from ramp_optimizer import optimize_flight_assignments
@@ -472,23 +529,25 @@ absolute actual-versus-target deviation; ordinary employee results outside the
 fairness population use `None` for target and deviation.
 `adjusted_workload` reports the reconstructed final fixed-point workload for
 every included ordinary employee, including factual zero workload for employees
-outside the active fairness subset. `longest_consecutive_streak` remains
-explicitly `None` because Milestone 10 has not been implemented. Leads and
-unrelated roles are excluded from ordinary employee results, and emergency Lead
-configuration does not enable a second solver pass.
+outside the active fairness subset. `longest_consecutive_streak` is the
+reconstructed integer maximum across that employee's separate shifts: `0` for
+no assignments, `1` for one assignment, and the actual longest run thereafter.
+Leads and unrelated roles are excluded from ordinary employee results, and
+emergency Lead configuration does not enable a second solver pass.
 
 `OptimizationResult.fairness_metrics` reports the fairness population size,
 total and average assignment counts, highest and lowest counts, and their
 spread. It also reports total participating shift minutes, the sum of public
 actual-versus-target deviations, and adjusted-workload spread. These values are
-reconstructed from final assignments and authoritative shifts; Stage 12 and the
+reconstructed from final assignments and authoritative shifts; the shift and
 workload objective values remain exact integers. Its
-`maximum_consecutive_streak` field remains explicitly `None`.
+`maximum_consecutive_streak` is the reconstructed maximum across the fairness
+population and is `0` when there are no participants.
 
 This optimizer is not operationally complete. It does not implement Milestone
-10 consecutive-flight penalties, Milestone 11 team continuity, Milestone 12
-emergency Lead solving, or later reporting, torture-test, benchmark, and polish
-milestones.
+11 team continuity, Milestone 12 emergency Lead solving, Milestone 13 expanded
+warnings and reporting, Milestone 14 full synthetic-day torture testing, or
+Milestone 15 final benchmarks and polish.
 
 ## TeamWork schedule import
 

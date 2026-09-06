@@ -132,7 +132,7 @@ def test_longer_shift_receives_unavoidable_extra_flight() -> None:
     assert flight_counts(result) == {"LONG": 2, "SHORT": 1}
     assert result.objective_values[9].value == 1
     assert result.objective_values[10].value == 1
-    assert result.objective_values[11].value == 0
+    assert result.objective_values[13].value == 0
 
 
 def test_raw_equality_remains_primary_over_proportional_target() -> None:
@@ -150,7 +150,7 @@ def test_raw_equality_remains_primary_over_proportional_target() -> None:
     assert flight_counts(result) == {"LONG": 3, "SHORT": 3}
     assert result.objective_values[9].value == 0
     assert result.objective_values[10].value == 0
-    assert result.objective_values[11].value == 1440
+    assert result.objective_values[13].value == 1440
     assert results["LONG"].scheduled_shift_minutes == 480
     assert results["SHORT"].scheduled_shift_minutes == 240
     assert results["LONG"].proportional_target_flight_count == 4.0
@@ -161,7 +161,7 @@ def test_raw_equality_remains_primary_over_proportional_target() -> None:
     assert result.fairness_metrics.total_participating_shift_minutes == 720
     assert result.fairness_metrics.total_shift_adjusted_deviation == 2.0
     assert (
-        result.objective_values[11].value
+        result.objective_values[13].value
         == result.fairness_metrics.total_shift_adjusted_deviation
         * result.fairness_metrics.total_participating_shift_minutes
     )
@@ -203,7 +203,7 @@ def test_three_employees_put_lower_count_on_short_shift() -> None:
     assert result.objective_values[10].value == 2
 
 
-def test_objective_reporting_appends_shift_adjustment_as_stage_12() -> None:
+def test_objective_reporting_places_shift_adjustment_at_stage_14() -> None:
     worker = employee("E1")
     result = optimize_flight_assignments(
         day_for(
@@ -214,16 +214,16 @@ def test_objective_reporting_appends_shift_adjustment_as_stage_12() -> None:
         one_person_config(),
     )
 
-    assert len(result.objective_values) == 14
-    assert result.objective_values[11].stage == 12
-    assert result.objective_values[11].name == (
+    assert len(result.objective_values) == 16
+    assert result.objective_values[13].stage == 14
+    assert result.objective_values[13].name == (
         "total_shift_adjusted_flight_count_deviation"
     )
-    assert result.objective_values[11].value == 0
-    assert result.objective_values[11].proven_optimal
+    assert result.objective_values[13].value == 0
+    assert result.objective_values[13].proven_optimal
 
 
-def test_fixed_short_shift_work_contributes_and_optional_work_favors_long_shift() -> None:
+def test_streak_fairness_precedes_shift_length_for_optional_work() -> None:
     flights = (
         arrival("101", 8, 10),
         arrival("102", 9, 10),
@@ -240,13 +240,12 @@ def test_fixed_short_shift_work_contributes_and_optional_work_favors_long_shift(
         day_for(flights, workers, shifts, fixed=fixed), one_person_config()
     )
 
-    assert flight_counts(result) == {"LONG": 2, "SHORT": 1}
+    assert flight_counts(result) == {"LONG": 1, "SHORT": 2}
     assert result.flight_results[0].fixed_employee_ids == ("SHORT",)
     assert result.flight_results[0].assigned_employee_ids == ("SHORT",)
-    assert all(
-        item.assigned_employee_ids == ("LONG",)
-        for item in result.flight_results[1:]
-    )
+    assert result.flight_results[1].assigned_employee_ids == ("LONG",)
+    assert result.flight_results[2].assigned_employee_ids == ("SHORT",)
+    assert result.objective_values[11].value == 1
 
 
 def test_raw_fairness_still_controls_optional_work_around_fixed_assignments() -> None:
@@ -489,7 +488,7 @@ def test_zero_participants_have_zero_shift_metrics_and_objective() -> None:
     assert result.fairness_metrics is not None
     assert result.fairness_metrics.total_participating_shift_minutes == 0
     assert result.fairness_metrics.total_shift_adjusted_deviation == 0.0
-    assert result.objective_values[11].value == 0
+    assert result.objective_values[13].value == 0
 
 
 def test_zero_participant_assignments_have_zero_modeled_deviation() -> None:
@@ -534,10 +533,10 @@ def test_one_participant_has_zero_shift_adjusted_deviation() -> None:
     assert result.employee_results[0].flight_count == 3
     assert result.employee_results[0].proportional_target_flight_count == 3.0
     assert result.employee_results[0].shift_adjusted_deviation == 0.0
-    assert result.objective_values[11].value == 0
+    assert result.objective_values[13].value == 0
 
 
-def test_shift_adjustment_adds_no_warnings_and_streak_fields_stay_none() -> None:
+def test_shift_adjustment_adds_no_warnings_and_streak_fields_are_populated() -> None:
     workers = (employee("LONG"), employee("SHORT"))
     shifts = (
         shift("LONG", at(8), at(16)),
@@ -550,16 +549,16 @@ def test_shift_adjustment_adds_no_warnings_and_streak_fields_stay_none() -> None
 
     assert result.warnings == ()
     assert all(
-        item.longest_consecutive_streak is None
+        item.longest_consecutive_streak >= 1
         and item.adjusted_workload is not None
         for item in result.employee_results
     )
     assert result.fairness_metrics is not None
-    assert result.fairness_metrics.maximum_consecutive_streak is None
+    assert result.fairness_metrics.maximum_consecutive_streak >= 1
     assert result.fairness_metrics.adjusted_workload_spread is not None
 
 
-def test_timeout_during_shift_stage_preserves_stage_11_solution(monkeypatch) -> None:
+def test_timeout_during_shift_stage_preserves_stage_13_solution(monkeypatch) -> None:
     workers = (employee("LONG"), employee("SHORT"))
     shifts = (
         shift("LONG", at(8), at(16)),
@@ -579,22 +578,22 @@ def test_timeout_during_shift_stage_preserves_stage_11_solution(monkeypatch) -> 
     def solver_factory():
         nonlocal calls
         calls += 1
-        return real_solver_type() if calls <= 11 else UnknownSolver()
+        return real_solver_type() if calls <= 13 else UnknownSolver()
 
     monkeypatch.setattr(optimizer_module.cp_model, "CpSolver", solver_factory)
 
     result = optimize_flight_assignments(day, one_person_config())
 
     assert result.status is OptimizationStatus.FEASIBLE
-    assert len(result.objective_values) == 12
-    assert all(item.proven_optimal for item in result.objective_values[:11])
-    assert result.objective_values[11].proven_optimal is False
+    assert len(result.objective_values) == 14
+    assert all(item.proven_optimal for item in result.objective_values[:13])
+    assert result.objective_values[13].proven_optimal is False
     assert sorted(flight_counts(result).values()) == [1, 2]
     assert result.objective_values[9].value == 1
     assert result.objective_values[10].value == 1
 
 
-def test_moderate_mixed_day_prefers_longer_shifts_after_raw_fairness() -> None:
+def test_moderate_mixed_day_remains_optimal_with_streak_modeling() -> None:
     group_times = ((8, 40), (9, 40), (10, 40), (11, 40), (12, 40))
     flights = tuple(
         movement
@@ -633,9 +632,9 @@ def test_moderate_mixed_day_prefers_longer_shifts_after_raw_fairness() -> None:
     assert result.objective_values[10].value == 4
     assert flight_counts(result) == {
         "LONG": 3,
-        "MID": 3,
+        "MID": 2,
         "SHORT": 2,
-        "SPLIT": 2,
+        "SPLIT": 3,
     }
     assert result.flight_results[0].fixed_employee_ids == ("SPLIT",)
     assert result.fairness_metrics is not None

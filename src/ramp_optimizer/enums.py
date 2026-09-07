@@ -57,6 +57,22 @@ class OptimizationStatus(StrEnum):
     UNKNOWN = "UNKNOWN"
 
 
+class EmergencyStaffingStatus(StrEnum):
+    """Operational outcome of the optional emergency-Lead fallback."""
+
+    NORMAL_SCHEDULE = "NORMAL_SCHEDULE"
+    LEAD_ASSISTED_SCHEDULE = "LEAD_ASSISTED_SCHEDULE"
+    CRITICAL_SHORTAGE_REMAINS = "CRITICAL_SHORTAGE_REMAINS"
+
+
+class EmergencyLeadReason(StrEnum):
+    """Measurable critical value supplied by one Lead assignment."""
+
+    MINIMUM_STAFFING = "MINIMUM_STAFFING"
+    PUSH_QUALIFICATION = "PUSH_QUALIFICATION"
+    CLOSE_QUALIFICATION = "CLOSE_QUALIFICATION"
+
+
 class StaffingStatus(StrEnum):
     """Operational staffing status for one flight."""
 
@@ -81,6 +97,9 @@ class WarningCode(StrEnum):
     CLOSE_QUALIFICATION_NOT_MET = "CLOSE_QUALIFICATION_NOT_MET"
     REQUIRED_BREAK_NOT_MET = "REQUIRED_BREAK_NOT_MET"
     EMERGENCY_LEAD_USED = "EMERGENCY_LEAD_USED"
+    LEAD_STAFFING_REQUIRED = "LEAD_STAFFING_REQUIRED"
+    LEAD_QUALIFICATION_REQUIRED = "LEAD_QUALIFICATION_REQUIRED"
+    CRITICAL_SHORTAGE_REMAINS = "CRITICAL_SHORTAGE_REMAINS"
     MANUAL_INTERVENTION_REQUIRED = "MANUAL_INTERVENTION_REQUIRED"
 
 

@@ -183,6 +183,7 @@ def test_equal_shift_lengths_preserve_raw_fairness_deterministically() -> None:
     assert first.flight_results == second.flight_results
     assert first.employee_results == second.employee_results
     assert first.fairness_metrics == second.fairness_metrics
+    assert first.continuity_metrics == second.continuity_metrics
     assert first.objective_values == second.objective_values
 
 
@@ -214,7 +215,7 @@ def test_objective_reporting_places_shift_adjustment_at_stage_14() -> None:
         one_person_config(),
     )
 
-    assert len(result.objective_values) == 16
+    assert len(result.objective_values) == 17
     assert result.objective_values[13].stage == 14
     assert result.objective_values[13].name == (
         "total_shift_adjusted_flight_count_deviation"

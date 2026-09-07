@@ -624,6 +624,7 @@ def test_repeated_seeded_runs_have_equivalent_streak_outputs() -> None:
     assert first.flight_results == second.flight_results
     assert first.employee_results == second.employee_results
     assert first.fairness_metrics == second.fairness_metrics
+    assert first.continuity_metrics == second.continuity_metrics
     assert first.objective_values == second.objective_values
 
 
@@ -705,7 +706,7 @@ def test_moderate_synthetic_day_completes_all_streak_stages() -> None:
     result = optimize_flight_assignments(day_for(flights, workers), active_config)
 
     assert result.status is OptimizationStatus.OPTIMAL
-    assert len(result.objective_values) == 16
+    assert len(result.objective_values) == 17
     assert all(item.proven_optimal for item in result.objective_values)
     assert sorted(item.flight_count for item in result.employee_results) == [3] * 4
     assert result.fairness_metrics is not None

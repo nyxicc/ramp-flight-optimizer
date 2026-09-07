@@ -7,6 +7,8 @@ from ramp_optimizer.config import (
 )
 from ramp_optimizer.enums import (
     BreakStatus,
+    EmergencyLeadReason,
+    EmergencyStaffingStatus,
     EligibilityReason,
     FlightType,
     IssueSeverity,
@@ -26,10 +28,13 @@ from ramp_optimizer.eligibility import (
 from ramp_optimizer.intervals import InvalidIntervalError, intervals_overlap
 from ramp_optimizer.models import (
     CandidateAssignment,
+    ContinuityMetrics,
+    ContinuityTransitionResult,
     Employee,
     EmployeeShift,
     EligibilityAssessment,
     EmployeeScheduleResult,
+    EmergencyLeadAssignmentResult,
     FairnessMetrics,
     Flight,
     FlightAssignmentResult,
@@ -88,10 +93,15 @@ __all__ = [
     "BreakStatus",
     "build_candidate_assignments",
     "CandidateAssignment",
+    "ContinuityMetrics",
+    "ContinuityTransitionResult",
     "DEFAULT_POSITION_ROLE_MAPPINGS",
     "Employee",
     "EmployeeShift",
     "EmployeeScheduleResult",
+    "EmergencyLeadAssignmentResult",
+    "EmergencyLeadReason",
+    "EmergencyStaffingStatus",
     "EligibilityAssessment",
     "EligibilityReason",
     "eligible_shifts_for_interval",

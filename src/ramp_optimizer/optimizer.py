@@ -1,6 +1,6 @@
-"""Milestone 10 optimizer with operational and layered fairness objectives."""
+"""Lexicographic ramp optimizer with optional emergency-Lead recovery."""
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timedelta
 from itertools import combinations
 from math import isfinite
@@ -17,18 +17,25 @@ from ramp_optimizer.eligibility import (
 from ramp_optimizer.intervals import intervals_overlap
 from ramp_optimizer.models import (
     CandidateAssignment,
+    ContinuityMetrics,
+    ContinuityTransitionResult,
     Employee,
     EmployeeScheduleResult,
+    EmergencyLeadAssignmentResult,
     FairnessMetrics,
     FlightAssignmentResult,
     ObjectiveValue,
     OperationalDay,
+    OptimizationAttemptSummary,
     OptimizationResult,
     ScheduleWarning,
 )
 from ramp_optimizer.enums import (
     BreakStatus,
+    EmergencyLeadReason,
+    EmergencyStaffingStatus,
     FlightType,
+    OperationalRole,
     OptimizationStatus,
     Qualification,
     StaffingStatus,
@@ -96,6 +103,24 @@ class _ModelData:
     adjusted_workload_spread: cp_model.IntVar
     pairwise_adjusted_workload_differences: tuple[cp_model.IntVar, ...]
     total_pairwise_adjusted_workload_difference: cp_model.IntVar
+    continuity_flight_pairs: tuple[tuple[int, int], ...]
+    retained_employee_transitions: dict[
+        tuple[int, int, int], cp_model.IntVar
+    ]
+    total_continuity_retention: cp_model.IntVar
+    include_leads: bool
+    lead_decisions: dict[tuple[int, int], cp_model.IntVar]
+    total_lead_assignments: cp_model.IntVar
+
+
+@dataclass(frozen=True, slots=True)
+class _CriticalFlightNeed:
+    """Critical defects in one Pass-1 flight result."""
+
+    flight_index: int
+    below_minimum: bool
+    missing_push: bool
+    missing_close: bool
 
 
 @dataclass(frozen=True, slots=True)
@@ -108,35 +133,376 @@ class _ObjectiveStage:
 def optimize_flight_assignments(
     day: OperationalDay, config: OptimizerConfig | None = None
 ) -> OptimizationResult:
-    """Optimize operations, then raw, streak, shift, and workload fairness."""
+    """Run the ordinary schedule first, then emergency Lead recovery if needed."""
 
     active_config = config or OptimizerConfig()
-    started_at = monotonic()
-
-    # Candidate preprocessing validates every input and makes illegal assignment
-    # variables unrepresentable in the CP-SAT model.
-    candidates = build_candidate_assignments(
+    overall_started_at = monotonic()
+    pass_one, _ = _run_optimization_pass(
         day,
         active_config,
         include_leads=False,
+        critical_needs=(),
     )
-    model_data = _build_model(day, active_config, candidates)
-    status, solver, objectives = _solve_lexicographically(
-        model_data, active_config, started_at
+    pass_one_needs = _critical_flight_needs(pass_one)
+    pass_one_attempt = _attempt_summary(
+        day,
+        pass_one,
+        included_leads=False,
+        lead_candidate_count=0,
     )
-    runtime = max(0.0, monotonic() - started_at)
 
-    if solver is None:
-        return _empty_solver_result(status, objectives, runtime)
-    return _build_result(
+    if not pass_one_needs or not active_config.allow_leads_for_minimum_staffing:
+        return replace(
+            pass_one,
+            attempts=(pass_one_attempt,),
+            emergency_lead_staffing_used=False,
+            emergency_leads_enabled=(
+                active_config.allow_leads_for_minimum_staffing
+            ),
+            emergency_staffing_status=(
+                EmergencyStaffingStatus.NORMAL_SCHEDULE
+                if not pass_one_needs
+                else EmergencyStaffingStatus.CRITICAL_SHORTAGE_REMAINS
+            ),
+            solver_runtime_seconds=max(0.0, monotonic() - overall_started_at),
+        )
+
+    pass_two, lead_candidate_count = _run_optimization_pass(
         day,
         active_config,
-        model_data,
-        solver,
-        status,
-        objectives,
-        runtime,
+        include_leads=True,
+        critical_needs=pass_one_needs,
     )
+    pass_two_attempt = _attempt_summary(
+        day,
+        pass_two,
+        included_leads=True,
+        lead_candidate_count=lead_candidate_count,
+    )
+    if not pass_two.flight_results:
+        return replace(
+            pass_one,
+            attempts=(pass_one_attempt, pass_two_attempt),
+            emergency_lead_staffing_used=False,
+            emergency_leads_enabled=True,
+            emergency_staffing_status=(
+                EmergencyStaffingStatus.CRITICAL_SHORTAGE_REMAINS
+            ),
+            solver_runtime_seconds=max(0.0, monotonic() - overall_started_at),
+        )
+
+    lead_assignments, lead_warnings = _derive_emergency_lead_assignments(
+        day, pass_two
+    )
+    pass_two_needs = _critical_flight_needs(pass_two)
+    return replace(
+        pass_two,
+        attempts=(pass_one_attempt, pass_two_attempt),
+        warnings=(
+            pass_two.warnings
+            + lead_warnings
+            + _remaining_critical_shortage_warnings(pass_two, pass_two_needs)
+        ),
+        emergency_lead_staffing_used=bool(lead_assignments),
+        emergency_leads_enabled=True,
+        emergency_staffing_status=(
+            EmergencyStaffingStatus.CRITICAL_SHORTAGE_REMAINS
+            if pass_two_needs
+            else EmergencyStaffingStatus.LEAD_ASSISTED_SCHEDULE
+            if lead_assignments
+            else EmergencyStaffingStatus.NORMAL_SCHEDULE
+        ),
+        lead_assignments=lead_assignments,
+        solver_runtime_seconds=max(0.0, monotonic() - overall_started_at),
+    )
+
+
+def _run_optimization_pass(
+    day: OperationalDay,
+    config: OptimizerConfig,
+    *,
+    include_leads: bool,
+    critical_needs: tuple[_CriticalFlightNeed, ...],
+) -> tuple[OptimizationResult, int]:
+    """Build and solve one fresh model without duplicating optimizer logic."""
+
+    started_at = monotonic()
+    candidates = build_candidate_assignments(
+        day,
+        config,
+        include_leads=include_leads,
+    )
+    if include_leads:
+        candidates = _filter_emergency_candidates(
+            day, config, candidates, critical_needs
+        )
+    model_data = _build_model(
+        day,
+        config,
+        candidates,
+        include_leads=include_leads,
+    )
+    status, solver, objectives = _solve_lexicographically(
+        model_data, config, started_at
+    )
+    runtime = max(0.0, monotonic() - started_at)
+    result = (
+        _empty_solver_result(status, objectives, runtime)
+        if solver is None
+        else _build_result(
+            day,
+            config,
+            model_data,
+            solver,
+            status,
+            objectives,
+            runtime,
+        )
+    )
+    return result, len(model_data.lead_decisions)
+
+
+def _critical_flight_needs(
+    result: OptimizationResult,
+) -> tuple[_CriticalFlightNeed, ...]:
+    """Independently detect only minimum and minimum-team qualification defects."""
+
+    needs: list[_CriticalFlightNeed] = []
+    for flight_index, flight_result in enumerate(result.flight_results):
+        below_minimum = not flight_result.minimum_met
+        minimum_qualified_team = (
+            flight_result.minimum_met
+            and flight_result.flight_type is not FlightType.ARRIVAL_ONLY
+        )
+        missing_push = minimum_qualified_team and not flight_result.push_covered
+        missing_close = minimum_qualified_team and not flight_result.close_covered
+        if below_minimum or missing_push or missing_close:
+            needs.append(
+                _CriticalFlightNeed(
+                    flight_index=flight_index,
+                    below_minimum=below_minimum,
+                    missing_push=missing_push,
+                    missing_close=missing_close,
+                )
+            )
+    return tuple(needs)
+
+
+def _critical_shortage_count(
+    needs: tuple[_CriticalFlightNeed, ...],
+) -> int:
+    return sum(
+        int(need.below_minimum)
+        + int(need.missing_push)
+        + int(need.missing_close)
+        for need in needs
+    )
+
+
+def _result_assignment_uses_lead_shift(
+    day: OperationalDay,
+    employee_index: int,
+    flight_result: FlightAssignmentResult,
+) -> bool:
+    employee_id = day.employees[employee_index].employee_id.strip().casefold()
+    return any(
+        shift.employee_id.strip().casefold() == employee_id
+        and shift.normalized_role is OperationalRole.RAMP_LEAD
+        and shift.start <= flight_result.work_start
+        and flight_result.work_end <= shift.end
+        for shift in day.employee_shifts
+    )
+
+
+def _lead_assignment_count(
+    day: OperationalDay, result: OptimizationResult
+) -> int:
+    employee_indices = {
+        employee.employee_id.strip().casefold(): index
+        for index, employee in enumerate(day.employees)
+    }
+    return sum(
+        _result_assignment_uses_lead_shift(
+            day,
+            employee_indices[employee_id.strip().casefold()],
+            flight_result,
+        )
+        for flight_result in result.flight_results
+        for employee_id in flight_result.assigned_employee_ids
+    )
+
+
+def _attempt_summary(
+    day: OperationalDay,
+    result: OptimizationResult,
+    *,
+    included_leads: bool,
+    lead_candidate_count: int,
+) -> OptimizationAttemptSummary:
+    needs = _critical_flight_needs(result)
+    qualification_compliant_flights = sum(
+        flight.minimum_met
+        and flight.flight_type is not FlightType.ARRIVAL_ONLY
+        and bool(flight.push_covered)
+        and bool(flight.close_covered)
+        for flight in result.flight_results
+    )
+    return OptimizationAttemptSummary(
+        included_leads=included_leads,
+        status=result.status,
+        minimum_staffed_flights=sum(
+            flight.minimum_met for flight in result.flight_results
+        ),
+        qualification_compliant_flights=qualification_compliant_flights,
+        lead_assignments=_lead_assignment_count(day, result),
+        critical_shortage_count=_critical_shortage_count(needs),
+        lead_candidate_count=lead_candidate_count,
+        solver_runtime_seconds=result.solver_runtime_seconds,
+    )
+
+
+def _flight_label(flight_result: FlightAssignmentResult) -> str:
+    return (
+        flight_result.flight.departure_flight_number
+        or flight_result.flight.arrival_flight_number
+        or "unnumbered flight"
+    )
+
+
+def _derive_emergency_lead_assignments(
+    day: OperationalDay,
+    result: OptimizationResult,
+) -> tuple[
+    tuple[EmergencyLeadAssignmentResult, ...],
+    tuple[ScheduleWarning, ...],
+]:
+    """Recompute each selected Lead's critical contribution from final crews."""
+
+    employee_indices = {
+        employee.employee_id.strip().casefold(): index
+        for index, employee in enumerate(day.employees)
+    }
+    assignments: list[EmergencyLeadAssignmentResult] = []
+    warnings: list[ScheduleWarning] = []
+    for flight_result in result.flight_results:
+        assigned_indices = tuple(
+            employee_indices[employee_id.strip().casefold()]
+            for employee_id in flight_result.assigned_employee_ids
+        )
+        for employee_index in assigned_indices:
+            if not _result_assignment_uses_lead_shift(
+                day, employee_index, flight_result
+            ):
+                continue
+            employee = day.employees[employee_index]
+            other_indices = tuple(
+                index for index in assigned_indices if index != employee_index
+            )
+            reasons: list[EmergencyLeadReason] = []
+            if flight_result.staffing_count <= flight_result.minimum_staff:
+                reasons.append(EmergencyLeadReason.MINIMUM_STAFFING)
+            if (
+                flight_result.minimum_met
+                and flight_result.flight_type is not FlightType.ARRIVAL_ONLY
+            ):
+                if (
+                    Qualification.PUSH in employee.qualifications
+                    and not any(
+                        Qualification.PUSH in day.employees[index].qualifications
+                        for index in other_indices
+                    )
+                ):
+                    reasons.append(EmergencyLeadReason.PUSH_QUALIFICATION)
+                if (
+                    Qualification.CLOSE_OUT in employee.qualifications
+                    and not any(
+                        Qualification.CLOSE_OUT
+                        in day.employees[index].qualifications
+                        for index in other_indices
+                    )
+                ):
+                    reasons.append(EmergencyLeadReason.CLOSE_QUALIFICATION)
+            assert reasons
+
+            label = _flight_label(flight_result)
+            reason_text = {
+                EmergencyLeadReason.MINIMUM_STAFFING: (
+                    f"Ramp Agents alone could not provide the required "
+                    f"{flight_result.minimum_staff} employees"
+                ),
+                EmergencyLeadReason.PUSH_QUALIFICATION: (
+                    "the crew otherwise had no push-qualified employee"
+                ),
+                EmergencyLeadReason.CLOSE_QUALIFICATION: (
+                    "the crew otherwise had no close-out-qualified employee"
+                ),
+            }
+            message = (
+                f"Lead {employee.name} was assigned to {label} because "
+                + "; and ".join(reason_text[reason] for reason in reasons)
+                + "."
+            )
+            assignments.append(
+                EmergencyLeadAssignmentResult(
+                    employee_id=employee.employee_id,
+                    flight=flight_result.flight,
+                    reasons=tuple(reasons),
+                    message=message,
+                )
+            )
+            warnings.append(
+                ScheduleWarning(
+                    code=(
+                        WarningCode.LEAD_STAFFING_REQUIRED
+                        if EmergencyLeadReason.MINIMUM_STAFFING in reasons
+                        else WarningCode.LEAD_QUALIFICATION_REQUIRED
+                    ),
+                    severity=WarningSeverity.INFO,
+                    message=message,
+                    arrival_flight_number=(
+                        flight_result.flight.arrival_flight_number
+                    ),
+                    departure_flight_number=(
+                        flight_result.flight.departure_flight_number
+                    ),
+                    employee_id=employee.employee_id,
+                )
+            )
+    return tuple(assignments), tuple(warnings)
+
+
+def _remaining_critical_shortage_warnings(
+    result: OptimizationResult,
+    needs: tuple[_CriticalFlightNeed, ...],
+) -> tuple[ScheduleWarning, ...]:
+    warnings: list[ScheduleWarning] = []
+    for need in needs:
+        flight_result = result.flight_results[need.flight_index]
+        defects: list[str] = []
+        if need.below_minimum:
+            defects.append("minimum staffing")
+        if need.missing_push:
+            defects.append("push qualification")
+        if need.missing_close:
+            defects.append("close-out qualification")
+        warnings.append(
+            ScheduleWarning(
+                code=WarningCode.CRITICAL_SHORTAGE_REMAINS,
+                severity=WarningSeverity.CRITICAL,
+                message=(
+                    f"{_flight_label(flight_result)} still lacks "
+                    + ", ".join(defects)
+                    + " after emergency Lead staffing."
+                ),
+                arrival_flight_number=(
+                    flight_result.flight.arrival_flight_number
+                ),
+                departure_flight_number=(
+                    flight_result.flight.departure_flight_number
+                ),
+            )
+        )
+    return tuple(warnings)
 
 
 def optimize_minimum_staffing(
@@ -151,6 +517,8 @@ def _build_model(
     day: OperationalDay,
     config: OptimizerConfig,
     candidates: tuple[CandidateAssignment, ...],
+    *,
+    include_leads: bool = False,
 ) -> _ModelData:
     model = cp_model.CpModel()
     facts = tuple(
@@ -166,6 +534,11 @@ def _build_model(
     decisions = {
         pair: model.new_bool_var(f"x_e{pair[0]}_f{pair[1]}")
         for pair in candidate_indices
+    }
+    lead_decisions = {
+        pair: decision
+        for pair, decision in decisions.items()
+        if _pair_uses_lead_shift(day, facts, *pair)
     }
     fixed_employee_indices = _fixed_employee_indices_by_flight(day)
     _add_candidate_overlap_constraints(model, decisions, facts)
@@ -333,7 +706,9 @@ def _build_model(
         decisions,
         fixed_employee_indices,
         facts,
+        include_leads=include_leads,
     )
+    ordinary_employee_indices = _included_ordinary_employee_indices(day, config)
     (
         fairness_employee_indices,
         fairness_flight_counts,
@@ -347,7 +722,7 @@ def _build_model(
         day,
         decisions,
         fixed_employee_indices,
-        included_employee_indices,
+        ordinary_employee_indices,
     )
     (
         streak_predecessor_arcs,
@@ -396,6 +771,37 @@ def _build_model(
         facts,
         fairness_employee_indices,
     )
+    (
+        continuity_flight_pairs,
+        retained_employee_transitions,
+        total_continuity_retention,
+    ) = _add_continuity_model(
+        model,
+        day,
+        config,
+        decisions,
+        fixed_employee_indices,
+        facts,
+        fairness_employee_indices,
+    )
+
+    _constrain_emergency_lead_value(
+        model,
+        day,
+        lead_decisions,
+        decisions,
+        fixed_employee_indices,
+        tuple(staff_counts),
+        tuple(minimum_met),
+        facts,
+        requirements,
+    )
+    total_lead_assignments = model.new_int_var(
+        0,
+        len(lead_decisions),
+        "total_lead_assignments",
+    )
+    model.add(total_lead_assignments == sum(lead_decisions.values()))
 
     return _ModelData(
         model=model,
@@ -461,6 +867,12 @@ def _build_model(
         total_pairwise_adjusted_workload_difference=(
             total_pairwise_adjusted_workload_difference
         ),
+        continuity_flight_pairs=continuity_flight_pairs,
+        retained_employee_transitions=retained_employee_transitions,
+        total_continuity_retention=total_continuity_retention,
+        include_leads=include_leads,
+        lead_decisions=lead_decisions,
+        total_lead_assignments=total_lead_assignments,
     )
 
 
@@ -527,6 +939,8 @@ def _add_break_model(
     decisions: dict[tuple[int, int], cp_model.IntVar],
     fixed_employee_indices: tuple[tuple[int, ...], ...],
     facts: tuple[FlightOperationalFacts, ...],
+    *,
+    include_leads: bool = False,
 ) -> tuple[
     tuple[int, ...],
     tuple[cp_model.IntVar | None, ...],
@@ -536,7 +950,9 @@ def _add_break_model(
 ]:
     """Add exact endpoint-derived break indicators without minute indexing."""
 
-    included_employee_indices = _included_ordinary_employee_indices(day, config)
+    included_employee_indices = _included_employee_indices(
+        day, config, include_leads=include_leads
+    )
     included_employee_set = set(included_employee_indices)
     assignment_values = _assignment_values_by_employee(
         day,
@@ -603,6 +1019,7 @@ def _add_break_model(
                     config,
                     earlier.work_start,
                     later.work_end,
+                    include_leads=include_leads,
                 ):
                     continue
 
@@ -812,6 +1229,34 @@ def _add_fairness_model(
         flight_count_spread,
         tuple(pairwise_differences),
         total_pairwise_difference,
+    )
+
+
+def _included_employee_indices(
+    day: OperationalDay,
+    config: OptimizerConfig,
+    *,
+    include_leads: bool,
+) -> tuple[int, ...]:
+    """Return enabled employees represented in the selected solve pass."""
+
+    return tuple(
+        employee_index
+        for employee_index, employee in enumerate(day.employees)
+        if employee.enabled
+        and any(
+            shift.employee_id.strip().casefold()
+            == employee.employee_id.strip().casefold()
+            and role_is_assignment_eligible(
+                shift.normalized_role,
+                include_leads=include_leads,
+                allow_trainees=config.allow_trainees_for_assignments,
+                allow_possible_ramp_support=(
+                    config.allow_possible_ramp_support_for_assignments
+                ),
+            )
+            for shift in day.employee_shifts
+        )
     )
 
 
@@ -1288,10 +1733,253 @@ def _add_adjusted_workload_model(
     )
 
 
+def _continuity_eligible_flight_pairs(
+    facts: tuple[FlightOperationalFacts, ...],
+    config: OptimizerConfig,
+) -> tuple[tuple[int, int], ...]:
+    """Return all stable non-overlapping flight pairs within the horizon."""
+
+    horizon = timedelta(minutes=config.continuity_horizon_minutes)
+    ordered_flight_indices = sorted(
+        range(len(facts)),
+        key=lambda flight_index: (
+            facts[flight_index].work_start,
+            facts[flight_index].work_end,
+            flight_index,
+        ),
+    )
+    pairs: list[tuple[int, int]] = []
+    for position, earlier_flight_index in enumerate(ordered_flight_indices):
+        earlier = facts[earlier_flight_index]
+        for later_flight_index in ordered_flight_indices[position + 1 :]:
+            later = facts[later_flight_index]
+            if later.work_start < earlier.work_end:
+                continue
+            if later.work_start - earlier.work_end > horizon:
+                break
+            pairs.append((earlier_flight_index, later_flight_index))
+    return tuple(pairs)
+
+
+def _pair_uses_lead_shift(
+    day: OperationalDay,
+    facts: tuple[FlightOperationalFacts, ...],
+    employee_index: int,
+    flight_index: int,
+) -> bool:
+    """Classify a candidate by the containing shift, supporting mixed-role days."""
+
+    employee_id = day.employees[employee_index].employee_id.strip().casefold()
+    fact = facts[flight_index]
+    return any(
+        shift.employee_id.strip().casefold() == employee_id
+        and shift.normalized_role is OperationalRole.RAMP_LEAD
+        and shift.start <= fact.work_start
+        and fact.work_end <= shift.end
+        for shift in day.employee_shifts
+    )
+
+
+def _employee_has_lead_shift(day: OperationalDay, employee_index: int) -> bool:
+    employee_id = day.employees[employee_index].employee_id.strip().casefold()
+    return any(
+        shift.employee_id.strip().casefold() == employee_id
+        and shift.normalized_role is OperationalRole.RAMP_LEAD
+        for shift in day.employee_shifts
+    )
+
+
+def _filter_emergency_candidates(
+    day: OperationalDay,
+    config: OptimizerConfig,
+    candidates: tuple[CandidateAssignment, ...],
+    critical_needs: tuple[_CriticalFlightNeed, ...],
+) -> tuple[CandidateAssignment, ...]:
+    """Admit Leads only on Pass-1-critical flights where they can help."""
+
+    facts = tuple(
+        derive_flight_operational_facts(flight, config) for flight in day.flights
+    )
+    employee_indices = {
+        employee.employee_id.strip().casefold(): index
+        for index, employee in enumerate(day.employees)
+    }
+    needs_by_flight = {need.flight_index: need for need in critical_needs}
+    filtered: list[CandidateAssignment] = []
+    for candidate in candidates:
+        employee_index = employee_indices[candidate.employee_id.strip().casefold()]
+        flight_index = day.flights.index(candidate.flight)
+        if not _pair_uses_lead_shift(day, facts, employee_index, flight_index):
+            filtered.append(candidate)
+            continue
+        need = needs_by_flight.get(flight_index)
+        if need is None:
+            continue
+        qualifications = day.employees[employee_index].qualifications
+        if (
+            need.below_minimum
+            or need.missing_push and Qualification.PUSH in qualifications
+            or need.missing_close and Qualification.CLOSE_OUT in qualifications
+        ):
+            filtered.append(candidate)
+    return tuple(filtered)
+
+
+def _constrain_emergency_lead_value(
+    model: cp_model.CpModel,
+    day: OperationalDay,
+    lead_decisions: dict[tuple[int, int], cp_model.IntVar],
+    decisions: dict[tuple[int, int], cp_model.IntVar],
+    fixed_employee_indices: tuple[tuple[int, ...], ...],
+    staff_counts: tuple[cp_model.IntVar, ...],
+    minimum_met: tuple[cp_model.IntVar, ...],
+    facts: tuple[FlightOperationalFacts, ...],
+    requirements: tuple[StaffingRequirements, ...],
+) -> None:
+    """Require every selected Lead to have independently measurable critical value."""
+
+    for (employee_index, flight_index), lead_decision in lead_decisions.items():
+        above_minimum = _add_exact_threshold_indicator(
+            model,
+            staff_counts[flight_index],
+            requirements[flight_index].minimum + 1,
+            f"above_minimum_for_lead_e{employee_index}_f{flight_index}",
+        )
+        staffing_reason = _add_exact_and_indicator(
+            model,
+            lead_decision,
+            above_minimum.Not(),
+            f"lead_minimum_value_e{employee_index}_f{flight_index}",
+        )
+        reasons: list[cp_model.IntVar] = [staffing_reason]
+
+        if facts[flight_index].flight_type is not FlightType.ARRIVAL_ONLY:
+            for qualification, suffix in (
+                (Qualification.PUSH, "push"),
+                (Qualification.CLOSE_OUT, "close"),
+            ):
+                if qualification not in day.employees[employee_index].qualifications:
+                    continue
+                fixed_other_count = sum(
+                    other_employee_index != employee_index
+                    and qualification
+                    in day.employees[other_employee_index].qualifications
+                    for other_employee_index in fixed_employee_indices[flight_index]
+                )
+                other_qualified_decisions = [
+                    decision
+                    for (
+                        other_employee_index,
+                        candidate_flight_index,
+                    ), decision in decisions.items()
+                    if candidate_flight_index == flight_index
+                    and other_employee_index != employee_index
+                    and qualification
+                    in day.employees[other_employee_index].qualifications
+                ]
+                no_other_qualified = _add_exact_zero_indicator(
+                    model,
+                    fixed_other_count + sum(other_qualified_decisions),
+                    (
+                        f"no_other_{suffix}_qualified_for_lead_"
+                        f"e{employee_index}_f{flight_index}"
+                    ),
+                )
+                assigned_and_minimum = _add_exact_and_indicator(
+                    model,
+                    lead_decision,
+                    minimum_met[flight_index],
+                    (
+                        f"lead_assigned_and_minimum_{suffix}_"
+                        f"e{employee_index}_f{flight_index}"
+                    ),
+                )
+                reasons.append(
+                    _add_exact_and_indicator(
+                        model,
+                        assigned_and_minimum,
+                        no_other_qualified,
+                        f"lead_{suffix}_value_e{employee_index}_f{flight_index}",
+                    )
+                )
+
+        model.add(lead_decision <= sum(reasons))
+
+
+def _add_continuity_model(
+    model: cp_model.CpModel,
+    day: OperationalDay,
+    config: OptimizerConfig,
+    decisions: dict[tuple[int, int], cp_model.IntVar],
+    fixed_employee_indices: tuple[tuple[int, ...], ...],
+    facts: tuple[FlightOperationalFacts, ...],
+    continuity_employee_indices: tuple[int, ...] | None = None,
+) -> tuple[
+    tuple[tuple[int, int], ...],
+    dict[tuple[int, int, int], cp_model.IntVar],
+    cp_model.IntVar,
+]:
+    """Add exact employee-retention indicators for plausible flight pairs."""
+
+    flight_pairs = _continuity_eligible_flight_pairs(facts, config)
+    assignment_values = _assignment_values_by_employee(
+        day,
+        decisions,
+        fixed_employee_indices,
+    )
+    retained_employee_transitions: dict[
+        tuple[int, int, int], cp_model.IntVar
+    ] = {}
+    included_employee_indices = (
+        range(len(day.employees))
+        if continuity_employee_indices is None
+        else continuity_employee_indices
+    )
+    for earlier_flight_index, later_flight_index in flight_pairs:
+        for employee_index in included_employee_indices:
+            employee_assignments = assignment_values[employee_index]
+            earlier_assigned = employee_assignments.get(earlier_flight_index)
+            later_assigned = employee_assignments.get(later_flight_index)
+            if earlier_assigned is None or later_assigned is None:
+                continue
+            retained_employee_transitions[
+                (
+                    employee_index,
+                    earlier_flight_index,
+                    later_flight_index,
+                )
+            ] = _add_exact_and_indicator(
+                model,
+                earlier_assigned,
+                later_assigned,
+                (
+                    f"continuity_retained_e{employee_index}"
+                    f"_f{earlier_flight_index}_f{later_flight_index}"
+                ),
+            )
+
+    total_continuity_retention = model.new_int_var(
+        0,
+        len(retained_employee_transitions),
+        "total_continuity_retention",
+    )
+    model.add(
+        total_continuity_retention
+        == sum(retained_employee_transitions.values())
+    )
+    return (
+        flight_pairs,
+        retained_employee_transitions,
+        total_continuity_retention,
+    )
+
+
 def _scheduled_shift_minutes_for_employee(
     day: OperationalDay,
     config: OptimizerConfig,
     employee_index: int,
+    *,
+    include_leads: bool = False,
 ) -> int:
     """Sum exact whole minutes for shifts allowed in the ordinary pass."""
 
@@ -1303,7 +1991,7 @@ def _scheduled_shift_minutes_for_employee(
             continue
         if not role_is_assignment_eligible(
             shift.normalized_role,
-            include_leads=False,
+            include_leads=include_leads,
             allow_trainees=config.allow_trainees_for_assignments,
             allow_possible_ramp_support=(
                 config.allow_possible_ramp_support_for_assignments
@@ -1323,6 +2011,8 @@ def _one_eligible_shift_contains_assignment_span(
     config: OptimizerConfig,
     span_start: datetime,
     span_end: datetime,
+    *,
+    include_leads: bool = False,
 ) -> bool:
     return bool(
         eligible_shifts_for_interval(
@@ -1330,7 +2020,7 @@ def _one_eligible_shift_contains_assignment_span(
             day.employee_shifts,
             span_start,
             span_end,
-            include_leads=False,
+            include_leads=include_leads,
             allow_trainees=config.allow_trainees_for_assignments,
             allow_possible_ramp_support=(
                 config.allow_possible_ramp_support_for_assignments
@@ -1345,6 +2035,8 @@ def _eligible_shift_index_for_assignment(
     config: OptimizerConfig,
     span_start: datetime,
     span_end: datetime,
+    *,
+    include_leads: bool = False,
 ) -> int:
     """Return the unique eligible shift containing an assignment window."""
 
@@ -1353,7 +2045,7 @@ def _eligible_shift_index_for_assignment(
         day.employee_shifts,
         span_start,
         span_end,
-        include_leads=False,
+        include_leads=include_leads,
         allow_trainees=config.allow_trainees_for_assignments,
         allow_possible_ramp_support=(
             config.allow_possible_ramp_support_for_assignments
@@ -1426,6 +2118,19 @@ def _add_exact_value_indicator(
     return indicator
 
 
+def _add_exact_zero_indicator(
+    model: cp_model.CpModel,
+    expression: cp_model.LinearExpr | int,
+    name: str,
+) -> cp_model.IntVar:
+    """Return a Boolean equal to whether a nonnegative expression is zero."""
+
+    indicator = model.new_bool_var(name)
+    model.add(expression == 0).only_enforce_if(indicator)
+    model.add(expression >= 1).only_enforce_if(indicator.Not())
+    return indicator
+
+
 def _add_exact_qualification_indicator(
     model: cp_model.CpModel,
     day: OperationalDay,
@@ -1456,8 +2161,8 @@ def _add_exact_qualification_indicator(
 
 def _add_exact_and_indicator(
     model: cp_model.CpModel,
-    left: cp_model.IntVar,
-    right: cp_model.IntVar,
+    left: cp_model.IntVar | int,
+    right: cp_model.IntVar | int,
     name: str,
 ) -> cp_model.IntVar:
     """Return a Boolean equal to the conjunction of two Boolean variables."""
@@ -1485,7 +2190,7 @@ def _add_exact_below_minimum_coverage_indicator(
 
 
 def _objective_stages(model_data: _ModelData) -> tuple[_ObjectiveStage, ...]:
-    return (
+    stages = (
         _ObjectiveStage(
             "minimum_covered_flights", True, sum(model_data.minimum_met)
         ),
@@ -1570,6 +2275,24 @@ def _objective_stages(model_data: _ModelData) -> tuple[_ObjectiveStage, ...]:
             False,
             model_data.total_pairwise_adjusted_workload_difference,
         ),
+        _ObjectiveStage(
+            "total_continuity_retention",
+            True,
+            model_data.total_continuity_retention,
+        ),
+    )
+    if not model_data.include_leads:
+        return stages
+    return (
+        stages[:6]
+        + (
+            _ObjectiveStage(
+                "total_emergency_lead_assignments",
+                False,
+                model_data.total_lead_assignments,
+            ),
+        )
+        + stages[6:]
     )
 
 
@@ -1677,6 +2400,96 @@ def _assigned_employee_indices_by_flight(
         if solver.value(decision):
             assigned_by_flight[flight_index].add(employee_index)
     return tuple(tuple(sorted(indices)) for indices in assigned_by_flight)
+
+
+def _derive_continuity_metrics(
+    day: OperationalDay,
+    model_data: _ModelData,
+    solver: cp_model.CpSolver,
+    assigned_by_flight: tuple[tuple[int, ...], ...],
+) -> ContinuityMetrics:
+    """Reconstruct continuity from final crews and verify model indicators."""
+
+    modeled_by_pair: dict[
+        tuple[int, int], list[tuple[int, cp_model.IntVar]]
+    ] = {}
+    for (
+        employee_index,
+        earlier_flight_index,
+        later_flight_index,
+    ), retained in model_data.retained_employee_transitions.items():
+        modeled_by_pair.setdefault(
+            (earlier_flight_index, later_flight_index),
+            [],
+        ).append((employee_index, retained))
+
+    transitions: list[ContinuityTransitionResult] = []
+    continuity_employee_set = set(model_data.fairness_employee_indices)
+    for earlier_flight_index, later_flight_index in (
+        model_data.continuity_flight_pairs
+    ):
+        earlier_assigned = set(assigned_by_flight[earlier_flight_index])
+        later_assigned = set(assigned_by_flight[later_flight_index])
+        retained_employee_indices = tuple(
+            employee_index
+            for employee_index in range(len(day.employees))
+            if employee_index in earlier_assigned
+            and employee_index in later_assigned
+            and employee_index in continuity_employee_set
+        )
+        modeled_retained_employee_indices = tuple(
+            employee_index
+            for employee_index, retained in modeled_by_pair.get(
+                (earlier_flight_index, later_flight_index),
+                (),
+            )
+            if solver.value(retained)
+        )
+        assert modeled_retained_employee_indices == retained_employee_indices
+
+        retained_employee_ids = tuple(
+            day.employees[employee_index].employee_id
+            for employee_index in retained_employee_indices
+        )
+        transitions.append(
+            ContinuityTransitionResult(
+                previous_flight=day.flights[earlier_flight_index],
+                next_flight=day.flights[later_flight_index],
+                retained_employee_ids=retained_employee_ids,
+                retention_count=len(retained_employee_ids),
+            )
+        )
+
+    total_retained_employee_transitions = sum(
+        transition.retention_count for transition in transitions
+    )
+    assert solver.value(model_data.total_continuity_retention) == (
+        total_retained_employee_transitions
+    )
+    strongest_transition = max(
+        transitions,
+        key=lambda transition: transition.retention_count,
+        default=None,
+    )
+    eligible_transition_count = len(transitions)
+    return ContinuityMetrics(
+        eligible_transition_count=eligible_transition_count,
+        total_retained_employee_transitions=(
+            total_retained_employee_transitions
+        ),
+        average_retained_employees_per_transition=(
+            total_retained_employee_transitions / eligible_transition_count
+            if eligible_transition_count
+            else 0.0
+        ),
+        strongest_retention_count=(
+            strongest_transition.retention_count
+            if strongest_transition is not None
+            else 0
+        ),
+        strongest_transition=strongest_transition,
+        transitions=tuple(transitions),
+    )
 
 
 def _build_result(
@@ -1799,6 +2612,13 @@ def _build_result(
                 warnings=tuple(flight_warnings),
             )
         )
+
+    continuity_metrics = _derive_continuity_metrics(
+        day,
+        model_data,
+        solver,
+        assigned_by_flight,
+    )
 
     fairness_counts = tuple(
         sum(
@@ -1948,6 +2768,7 @@ def _build_result(
             model_data.facts,
             employee_index,
             ordered_flight_indices,
+            include_leads=model_data.include_leads,
         )
         longest_streaks_by_employee[employee_index] = (
             longest_consecutive_streak
@@ -1982,7 +2803,13 @@ def _build_result(
             model_data.facts,
             employee_index,
             ordered_flight_indices,
+            include_leads=model_data.include_leads,
         )
+        if (
+            not ordered_flight_indices
+            and _employee_has_lead_shift(day, employee_index)
+        ):
+            break_status = BreakStatus.NOT_APPLICABLE
         evaluable = model_data.break_evaluable[employee_index]
         achieved = model_data.break_achieved[employee_index]
         unsatisfied = model_data.known_unsatisfied_break[employee_index]
@@ -2048,6 +2875,7 @@ def _build_result(
                     day,
                     config,
                     employee_index,
+                    include_leads=model_data.include_leads,
                 ),
                 proportional_target_flight_count=proportional_targets.get(
                     employee_index
@@ -2115,6 +2943,7 @@ def _build_result(
         flight_results=tuple(flight_results),
         employee_results=tuple(employee_results),
         fairness_metrics=fairness_metrics,
+        continuity_metrics=continuity_metrics,
         attempts=(),
         objective_values=objectives,
         warnings=tuple(all_warnings),
@@ -2129,6 +2958,8 @@ def _derive_break_status(
     facts: tuple[FlightOperationalFacts, ...],
     employee_index: int,
     ordered_flight_indices: tuple[int, ...],
+    *,
+    include_leads: bool = False,
 ) -> BreakStatus:
     """Derive public break status from final chronological assignments."""
 
@@ -2151,6 +2982,7 @@ def _derive_break_status(
             config,
             earlier.work_start,
             later.work_end,
+            include_leads=include_leads,
         ):
             return BreakStatus.SATISFIED
     return BreakStatus.UNSATISFIED
@@ -2162,6 +2994,8 @@ def _derive_consecutive_streaks(
     facts: tuple[FlightOperationalFacts, ...],
     employee_index: int,
     assigned_flight_indices: tuple[int, ...],
+    *,
+    include_leads: bool = False,
 ) -> tuple[int, dict[int, int], dict[int, int]]:
     """Reconstruct per-flight runs and immediate predecessors by shift."""
 
@@ -2174,6 +3008,7 @@ def _derive_consecutive_streaks(
             config,
             facts[flight_index].work_start,
             facts[flight_index].work_end,
+            include_leads=include_leads,
         )
         assignments_by_shift.setdefault(shift_index, []).append(flight_index)
 
@@ -2223,6 +3058,7 @@ def _empty_solver_result(
         flight_results=(),
         employee_results=(),
         fairness_metrics=None,
+        continuity_metrics=None,
         attempts=(),
         objective_values=objectives,
         warnings=(),

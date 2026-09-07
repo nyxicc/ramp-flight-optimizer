@@ -54,6 +54,21 @@ def test_boolean_is_not_accepted_as_an_integer_configuration_value() -> None:
     )
 
 
+def test_continuity_horizon_requires_a_positive_nonboolean_integer() -> None:
+    for invalid_value in (0, True):
+        issues = validate_config(
+            replace(
+                OptimizerConfig(),
+                continuity_horizon_minutes=invalid_value,
+            )
+        )
+
+        assert any(
+            issue.path == "config.continuity_horizon_minutes"
+            for issue in issues
+        )
+
+
 def test_invalid_timing_and_express_threshold_are_reported() -> None:
     config = replace(
         OptimizerConfig(), arrival_preparation_minutes=0, express_threshold=-1

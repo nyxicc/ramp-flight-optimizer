@@ -632,6 +632,7 @@ def test_objective_order_places_streak_before_shift_and_workload_stages() -> Non
         (14, "total_shift_adjusted_flight_count_deviation"),
         (15, "adjusted_workload_spread"),
         (16, "total_pairwise_adjusted_workload_difference"),
+        (17, "total_continuity_retention"),
     ]
     assert all(item.proven_optimal for item in result.objective_values)
 

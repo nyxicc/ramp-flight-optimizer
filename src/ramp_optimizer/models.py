@@ -5,6 +5,8 @@ from datetime import date, datetime
 
 from ramp_optimizer.enums import (
     BreakStatus,
+    EmergencyLeadReason,
+    EmergencyStaffingStatus,
     EligibilityReason,
     FlightType,
     IssueSeverity,
@@ -190,6 +192,28 @@ class FlightAssignmentResult:
 
 
 @dataclass(frozen=True, slots=True)
+class ContinuityTransitionResult:
+    """Retained employees across one plausible chronological flight pair."""
+
+    previous_flight: Flight
+    next_flight: Flight
+    retained_employee_ids: tuple[str, ...]
+    retention_count: int
+
+
+@dataclass(frozen=True, slots=True)
+class ContinuityMetrics:
+    """Transparent transition-level and schedule-wide continuity facts."""
+
+    eligible_transition_count: int
+    total_retained_employee_transitions: int
+    average_retained_employees_per_transition: float
+    strongest_retention_count: int
+    strongest_transition: ContinuityTransitionResult | None
+    transitions: tuple[ContinuityTransitionResult, ...]
+
+
+@dataclass(frozen=True, slots=True)
 class EmployeeScheduleResult:
     """Chronological assignments and transparent workload facts for an employee."""
 
@@ -234,6 +258,16 @@ class ObjectiveValue:
 
 
 @dataclass(frozen=True, slots=True)
+class EmergencyLeadAssignmentResult:
+    """One emergency Lead intervention and its independently derived reasons."""
+
+    employee_id: str
+    flight: Flight
+    reasons: tuple[EmergencyLeadReason, ...]
+    message: str
+
+
+@dataclass(frozen=True, slots=True)
 class OptimizationAttemptSummary:
     """Audit summary for the Ramp-Agent-only or emergency-Lead attempt."""
 
@@ -242,6 +276,9 @@ class OptimizationAttemptSummary:
     minimum_staffed_flights: int
     qualification_compliant_flights: int
     lead_assignments: int = 0
+    critical_shortage_count: int = 0
+    lead_candidate_count: int = 0
+    solver_runtime_seconds: float = 0.0
 
 
 @dataclass(frozen=True, slots=True)
@@ -252,8 +289,14 @@ class OptimizationResult:
     flight_results: tuple[FlightAssignmentResult, ...]
     employee_results: tuple[EmployeeScheduleResult, ...]
     fairness_metrics: FairnessMetrics | None
+    continuity_metrics: ContinuityMetrics | None
     attempts: tuple[OptimizationAttemptSummary, ...]
     objective_values: tuple[ObjectiveValue, ...]
     warnings: tuple[ScheduleWarning, ...] = ()
     emergency_lead_staffing_used: bool | None = None
+    emergency_leads_enabled: bool = False
+    emergency_staffing_status: EmergencyStaffingStatus = (
+        EmergencyStaffingStatus.NORMAL_SCHEDULE
+    )
+    lead_assignments: tuple[EmergencyLeadAssignmentResult, ...] = ()
     solver_runtime_seconds: float = 0.0

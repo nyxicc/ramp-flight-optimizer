@@ -5,7 +5,7 @@ from synthetic operational data.
 
 ## Current scope
 
-Milestones 1-10 are implemented. The repository currently provides:
+Milestones 1-11 are implemented. The repository currently provides:
 
 - immutable employee, shift, flight, and result domain models;
 - structured input validation;
@@ -17,10 +17,11 @@ Milestones 1-10 are implemented. The repository currently provides:
 - explainable employee-flight eligibility and validated candidate preprocessing;
 - a limited CP-SAT optimizer for staffing, push and close-out qualification
   coverage, required between-assignment breaks, raw flight-count fairness, and
-  consecutive-flight, shift-length, and adjusted-workload fairness.
+  consecutive-flight, shift-length, adjusted-workload, and emergent team-
+  continuity preferences.
 
-Team continuity, emergency Lead solving, expanded reporting, and later
-integration work are not implemented yet.
+Emergency Lead solving, expanded warnings/reporting, and later integration work
+are not implemented yet.
 
 ## Employee and availability model
 
@@ -287,7 +288,7 @@ in stable employee order.
 Minimum staffing, qualification coverage, and break coverage are recoverable
 rather than hard constraints, so a constrained day still returns its best
 partial schedule with critical warnings for every known shortage. The optimizer
-uses sixteen sequential integer objective stages:
+uses seventeen sequential integer objective stages:
 
 1. Maximize flights reaching minimum staffing.
 2. Maximize minimum-staffed departures and turns covering both qualifications.
@@ -308,6 +309,7 @@ uses sixteen sequential integer objective stages:
 14. Minimize total shift-adjusted proportional flight-count deviation.
 15. Minimize adjusted-workload spread.
 16. Minimize total pairwise adjusted-workload difference.
+17. Maximize retained employee transitions across plausible nearby flight pairs.
 
 The exact formulation uses one break stage rather than redundant achieved and
 unsatisfied stages. Minimizing known unsatisfied breaks improves employees with
@@ -490,6 +492,113 @@ workload and remain immutable.
 These factors are configurable, explainable portfolio assumptions. They are not
 empirical safety measurements or proprietary airline standards.
 
+### Emergent team continuity
+
+Stage 17 is the final and lowest-priority objective. It does not define Team A,
+Team B, employee affinity, or any permanent grouping. A temporary team exists
+only as the assigned employee set on one flight, and employees remain free to
+split whenever any stage 1–16 outcome would otherwise worsen.
+
+The optimizer considers every stable chronological flight pair whose work
+windows do not overlap and whose second window begins at or after the first
+window ends with a gap no greater than
+`OptimizerConfig.continuity_horizon_minutes` (120 minutes by default). A gap
+exactly equal to the horizon is eligible; a larger gap and overlapping flights
+are not. All qualifying pairs are retained rather than applying an arbitrary
+next-flight cutoff. For the expected 15–25-flight input, this has an absolute
+pre-filter bound of 105–300 flight pairs and is usually much smaller after the
+horizon filter.
+
+For each eligible flight pair and employee who can appear on both endpoints,
+the model creates one exact Boolean conjunction:
+
+```text
+retained[e, earlier, later]
+    = assigned[e, earlier] AND assigned[e, later]
+```
+
+The indicator is constrained below both fixed-or-selected assignment-presence
+expressions and above their sum minus one. Fixed assignments therefore
+participate naturally, and the indicator cannot be set to zero when both
+endpoints are assigned. Stage 17 maximizes the unweighted integer sum of these
+indicators. Every retained employee contributes one unit, so partial retention
+receives partial credit and team-size differences need no ratio. Flight type,
+Mainline/Express category, and heavy status do not change the continuity rule.
+
+Because stages 1–16 have already been solved and fixed, continuity cannot alter
+minimum or preferred staffing, qualifications, breaks, raw-count fairness,
+streaks, shift-length adjustment, or adjusted workload. Existing staffing caps
+also prevent extra assignments: normal flights remain capped at four and heavy
+flights at five under default configuration. Idle time receives no penalty or
+reward.
+
+`OptimizationResult.continuity_metrics` reports every eligible previous/next
+flight pair, retained employee IDs in stable employee order, and its retention
+count. It also reports the eligible-pair count, total retained employee
+transitions, average retained employees per eligible pair, strongest retention
+count, and the first strongest transition in deterministic pair order. The
+average denominator is therefore explicit; no continuity percentage is
+invented. These values are independently rebuilt from final crew-set
+intersections and asserted against the CP-SAT indicators and stage total.
+
+On the deterministic 12-flight/four-employee representative case, the horizon
+produces 30 eligible flight pairs and 120 retained Boolean variables. One local
+measurement changed solve runtime from 3.813 seconds before Milestone 11 to
+4.171 seconds after it, remained `OPTIMAL` under the existing 8-second test
+budget, preserved `3–3–3–3` raw counts and maximum streak `1`, and improved the
+retained score from 7 in the prior schedule to 8. These are environment-specific
+measurements, not a general performance claim.
+
+### Emergency Lead recovery
+
+`OptimizerConfig.allow_leads_for_minimum_staffing` remains `False` by default.
+Every optimization first builds and solves the unchanged 17-stage Ramp-Agent
+model. The solved crews are then inspected independently. A critical shortage
+is either a flight below its three-person minimum, or a minimum-staffed
+departure/turn missing push and/or close-out coverage. Preferred-staffing
+shortfalls are deliberately noncritical. If no critical shortage exists, the
+first result returns immediately even when emergency Lead use is enabled.
+
+When critical shortages remain and the option is enabled, the optimizer builds
+a fresh model through the same parameterized builder. Ordinary candidates are
+unchanged. Enabled Leads are admitted only for Pass-1-critical flights, must
+have a Lead shift containing the complete work window, and must obey the same
+overlap, staffing-cap, qualification, and between-assignment break rules. A
+qualification-only candidate must carry a qualification that was missing in
+Pass 1.
+
+Every selected Lead assignment also has a hard, measurable-value constraint.
+It must either be necessary to keep its final crew at the operational minimum,
+or be the sole push or close-out provider on a minimum-staffed departure/turn.
+This prevents Lead use for preferred staffing, fairness, streaks, workload, or
+continuity even before objective tie-breaking. The emergency model inserts one
+new lexicographic stage after the six critical-operations/break stages:
+
+```text
+1-6   existing minimum, qualification, shortage, and break stages
+7     minimize total emergency Lead assignments
+8-18  existing preferred staffing, Ramp-Agent fairness, streak,
+      shift/workload, and Ramp-Agent continuity stages
+```
+
+Thus the ordinary solve retains its original 17 stage names and numbers. In
+Pass 2, critical coverage and breaks are fixed before Lead use is minimized;
+preferred staffing and all fairness refinements come afterward. Lead counts do
+not enter Ramp-Agent fairness, streak, shift-adjusted workload, or continuity
+objectives. Necessary Leads still receive normal legality and break reporting,
+while unused Leads in an attempted emergency pass have a `NOT_APPLICABLE`
+break result.
+
+`OptimizationResult.attempts` records each attempted pass, status, runtime,
+critical-shortage count, operational coverage counts, Lead assignment count,
+and Lead candidate-variable count. `emergency_staffing_status` distinguishes
+`NORMAL_SCHEDULE`, `LEAD_ASSISTED_SCHEDULE`, and
+`CRITICAL_SHORTAGE_REMAINS`. Each `lead_assignments` item states the flight,
+Lead, and independently reconstructed minimum/push/close reason. Structured
+informational warnings expose successful Lead interventions; if an attempted
+fallback remains insufficient, a critical warning identifies each affected
+flight.
+
 Each proven optimum is fixed before solving the next stage. Sequential solves
 preserve true priority without arbitrary giant weights, and all stages share
 one total time budget. Qualification stages therefore cannot reduce the maximum
@@ -500,9 +609,9 @@ three-person minimum, then the remaining two employees reduce total shortage
 on the other flight. Such a partial schedule can still be mathematically
 `OPTIMAL`. If a later objective times out or returns `UNKNOWN`, the last known
 feasible schedule is retained and returned with non-optimal objective metadata.
-This applies at both streak stages and at later refinements: all previously
-proven raw-count or streak optima remain fixed, and public streak values are
-reconstructed from whichever retained schedule is returned.
+This applies at the streak, workload, and continuity stages: all previously
+proven objective values remain fixed, and public metrics are reconstructed from
+whichever retained schedule is returned.
 
 ```python
 from ramp_optimizer import optimize_flight_assignments
@@ -532,8 +641,9 @@ every included ordinary employee, including factual zero workload for employees
 outside the active fairness subset. `longest_consecutive_streak` is the
 reconstructed integer maximum across that employee's separate shifts: `0` for
 no assignments, `1` for one assignment, and the actual longest run thereafter.
-Leads and unrelated roles are excluded from ordinary employee results, and
-emergency Lead configuration does not enable a second solver pass.
+Leads and unrelated roles are excluded from ordinary Pass-1 employee results.
+When Pass 2 is required, enabled Leads are included in employee reporting but
+remain excluded from the Ramp-Agent fairness population.
 
 `OptimizationResult.fairness_metrics` reports the fairness population size,
 total and average assignment counts, highest and lowest counts, and their
@@ -544,10 +654,13 @@ workload objective values remain exact integers. Its
 `maximum_consecutive_streak` is the reconstructed maximum across the fairness
 population and is `0` when there are no participants.
 
+`OptimizationResult.continuity_metrics` is populated for every solved result,
+including a factual zero/empty value when no flight pair is horizon-eligible.
+Its transition records reference the original immutable `Flight` values and
+list exactly which employees appear in both final crews.
+
 This optimizer is not operationally complete. It does not implement Milestone
-11 team continuity, Milestone 12 emergency Lead solving, Milestone 13 expanded
-warnings and reporting, Milestone 14 full synthetic-day torture testing, or
-Milestone 15 final benchmarks and polish.
+13 or later features.
 
 ## TeamWork schedule import
 

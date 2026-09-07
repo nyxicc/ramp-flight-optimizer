@@ -238,7 +238,7 @@ def test_disabled_outside_shift_and_lead_are_never_assigned() -> None:
     assert result.flight_results[0].assigned_employee_ids == ("LEGAL",)
 
 
-def test_emergency_lead_config_does_not_enable_lead_in_ordinary_optimizer() -> None:
+def test_emergency_lead_config_runs_fallback_only_for_critical_shortage() -> None:
     lead = Employee("L001", "Lead")
     day = OperationalDay(
         date(2026, 9, 2),
@@ -252,7 +252,10 @@ def test_emergency_lead_config_does_not_enable_lead_in_ordinary_optimizer() -> N
 
     result = optimize_minimum_staffing(day, config)
 
-    assert result.flight_results[0].assigned_employee_ids == ()
+    assert result.flight_results[0].assigned_employee_ids == ("L001",)
+    assert len(result.attempts) == 2
+    assert result.attempts[0].included_leads is False
+    assert result.attempts[1].included_leads is True
 
 
 @pytest.mark.parametrize(
@@ -467,6 +470,7 @@ def test_objective_reporting_matches_partial_schedule() -> None:
         "total_shift_adjusted_flight_count_deviation",
         "adjusted_workload_spread",
         "total_pairwise_adjusted_workload_difference",
+        "total_continuity_retention",
     ]
     assert [objective.value for objective in result.objective_values] == [
         0,
@@ -482,6 +486,7 @@ def test_objective_reporting_matches_partial_schedule() -> None:
         0,
         1,
         2,
+        0,
         0,
         0,
         0,
@@ -547,8 +552,9 @@ def test_result_preserves_order_facts_and_reports_current_metrics() -> None:
     assert result.fairness_metrics.flight_count_spread == 1
     assert result.fairness_metrics.maximum_consecutive_streak == 1
     assert result.fairness_metrics.adjusted_workload_spread is not None
-    assert result.attempts == ()
-    assert result.emergency_lead_staffing_used is None
+    assert len(result.attempts) == 1
+    assert result.attempts[0].included_leads is False
+    assert result.emergency_lead_staffing_used is False
     assert day == original_day
 
 
@@ -561,6 +567,7 @@ def test_empty_day_and_no_employee_day_return_optimal_results() -> None:
     assert empty.status is OptimizationStatus.OPTIMAL
     assert empty.flight_results == ()
     assert [objective.value for objective in empty.objective_values] == [
+        0,
         0,
         0,
         0,

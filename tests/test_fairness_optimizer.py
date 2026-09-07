@@ -161,7 +161,7 @@ def test_fairness_objectives_follow_all_existing_objectives() -> None:
         (12, "maximum_consecutive_flight_streak"),
         (13, "total_employee_longest_streaks"),
     ]
-    assert len(result.objective_values) == 16
+    assert len(result.objective_values) == 17
 
 
 def test_pairwise_stage_resolves_a_tied_spread_in_the_middle() -> None:
@@ -606,6 +606,7 @@ def test_repeated_seeded_runs_return_equivalent_fairness_results() -> None:
     assert first.flight_results == second.flight_results
     assert first.employee_results == second.employee_results
     assert first.fairness_metrics == second.fairness_metrics
+    assert first.continuity_metrics == second.continuity_metrics
     assert first.objective_values == second.objective_values
 
 

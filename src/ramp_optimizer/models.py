@@ -5,6 +5,7 @@ from datetime import date, datetime
 
 from ramp_optimizer.enums import (
     BreakStatus,
+    EmergencyPassDisposition,
     EmergencyLeadReason,
     EmergencyStaffingStatus,
     EligibilityReason,
@@ -12,6 +13,7 @@ from ramp_optimizer.enums import (
     IssueSeverity,
     OperationalRole,
     OptimizationStatus,
+    OperationalReadinessStatus,
     Qualification,
     StaffingStatus,
     WarningCode,
@@ -279,6 +281,36 @@ class OptimizationAttemptSummary:
     critical_shortage_count: int = 0
     lead_candidate_count: int = 0
     solver_runtime_seconds: float = 0.0
+    pass_number: int = 0
+    attempt_label: str = ""
+    usable_schedule: bool = False
+    selected_as_final: bool = False
+    known_unsatisfied_required_break_count: int = 0
+    objective_stages_completed: int = 0
+    all_objectives_proven_optimal: bool = False
+
+
+@dataclass(frozen=True, slots=True)
+class ScheduleSummary:
+    """Concise final schedule facts derived from public result records."""
+
+    total_flights: int = 0
+    minimum_staffed_flights: int = 0
+    below_minimum_flights: int = 0
+    preferred_staffed_flights: int = 0
+    qualification_required_flights: int = 0
+    qualification_compliant_flights: int = 0
+    missing_push_flights: int = 0
+    missing_close_out_flights: int = 0
+    participating_employee_count: int = 0
+    employees_with_satisfied_break: int = 0
+    employees_with_unsatisfied_break: int = 0
+    employees_with_nonevaluable_break: int = 0
+    total_assignments: int = 0
+    emergency_lead_assignments: int = 0
+    critical_warning_count: int = 0
+    warning_count: int = 0
+    all_objectives_proven_optimal: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -300,3 +332,10 @@ class OptimizationResult:
     )
     lead_assignments: tuple[EmergencyLeadAssignmentResult, ...] = ()
     solver_runtime_seconds: float = 0.0
+    operational_readiness: OperationalReadinessStatus = (
+        OperationalReadinessStatus.NO_USABLE_SCHEDULE
+    )
+    emergency_pass_disposition: EmergencyPassDisposition = (
+        EmergencyPassDisposition.NOT_ENABLED
+    )
+    schedule_summary: ScheduleSummary | None = None

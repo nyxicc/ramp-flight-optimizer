@@ -28,15 +28,18 @@ from ramp_optimizer.models import (
     OperationalDay,
     OptimizationAttemptSummary,
     OptimizationResult,
+    ScheduleSummary,
     ScheduleWarning,
 )
 from ramp_optimizer.enums import (
     BreakStatus,
     EmergencyLeadReason,
+    EmergencyPassDisposition,
     EmergencyStaffingStatus,
     FlightType,
     OperationalRole,
     OptimizationStatus,
+    OperationalReadinessStatus,
     Qualification,
     StaffingStatus,
     WarningCode,
@@ -124,6 +127,29 @@ class _CriticalFlightNeed:
 
 
 @dataclass(frozen=True, slots=True)
+class _CriticalOperationalScore:
+    """Reconstructed pre-Lead objectives in exact priority order."""
+
+    minimum_staffed_flights: int
+    qualification_compliant_flights: int
+    individual_qualification_coverage: int
+    total_minimum_shortfall: int
+    largest_minimum_shortfall: int
+    known_unsatisfied_breaks: int
+
+    @property
+    def comparison_key(self) -> tuple[int, ...]:
+        return (
+            self.minimum_staffed_flights,
+            self.qualification_compliant_flights,
+            self.individual_qualification_coverage,
+            -self.total_minimum_shortfall,
+            -self.largest_minimum_shortfall,
+            -self.known_unsatisfied_breaks,
+        )
+
+
+@dataclass(frozen=True, slots=True)
 class _ObjectiveStage:
     name: str
     maximize: bool
@@ -143,28 +169,46 @@ def optimize_flight_assignments(
         include_leads=False,
         critical_needs=(),
     )
+    pass_one_usable = _result_has_usable_schedule(day, pass_one)
     pass_one_needs = _critical_flight_needs(pass_one)
     pass_one_attempt = _attempt_summary(
         day,
         pass_one,
+        pass_number=1,
         included_leads=False,
         lead_candidate_count=0,
     )
 
-    if not pass_one_needs or not active_config.allow_leads_for_minimum_staffing:
-        return replace(
+    if not pass_one_usable:
+        return _finalize_result(
+            day,
             pass_one,
-            attempts=(pass_one_attempt,),
-            emergency_lead_staffing_used=False,
+            attempts=(replace(pass_one_attempt, selected_as_final=True),),
             emergency_leads_enabled=(
                 active_config.allow_leads_for_minimum_staffing
             ),
-            emergency_staffing_status=(
-                EmergencyStaffingStatus.NORMAL_SCHEDULE
-                if not pass_one_needs
-                else EmergencyStaffingStatus.CRITICAL_SHORTAGE_REMAINS
+            disposition=(
+                EmergencyPassDisposition.NOT_ATTEMPTED_NO_USABLE_SCHEDULE
+                if active_config.allow_leads_for_minimum_staffing
+                else EmergencyPassDisposition.NOT_ENABLED
             ),
-            solver_runtime_seconds=max(0.0, monotonic() - overall_started_at),
+            overall_runtime=max(0.0, monotonic() - overall_started_at),
+        )
+
+    if not pass_one_needs or not active_config.allow_leads_for_minimum_staffing:
+        return _finalize_result(
+            day,
+            pass_one,
+            attempts=(replace(pass_one_attempt, selected_as_final=True),),
+            emergency_leads_enabled=(
+                active_config.allow_leads_for_minimum_staffing
+            ),
+            disposition=(
+                EmergencyPassDisposition.NOT_ENABLED
+                if not active_config.allow_leads_for_minimum_staffing
+                else EmergencyPassDisposition.NOT_NEEDED
+            ),
+            overall_runtime=max(0.0, monotonic() - overall_started_at),
         )
 
     pass_two, lead_candidate_count = _run_optimization_pass(
@@ -176,44 +220,57 @@ def optimize_flight_assignments(
     pass_two_attempt = _attempt_summary(
         day,
         pass_two,
+        pass_number=2,
         included_leads=True,
         lead_candidate_count=lead_candidate_count,
     )
-    if not pass_two.flight_results:
-        return replace(
+    pass_two_lead_assignments: tuple[EmergencyLeadAssignmentResult, ...] = ()
+    pass_two_lead_reporting_valid = True
+    if _result_has_usable_schedule(day, pass_two):
+        pass_two_lead_assignments, _ = _derive_emergency_lead_assignments(
+            day,
+            pass_two,
+            ordinary_result=pass_one,
+        )
+        pass_two_lead_reporting_valid = (
+            len(pass_two_lead_assignments)
+            == _lead_assignment_count(day, pass_two)
+        )
+    adopt_pass_two, disposition, disposition_message = (
+        _emergency_adoption_decision(
+            day,
             pass_one,
-            attempts=(pass_one_attempt, pass_two_attempt),
-            emergency_lead_staffing_used=False,
-            emergency_leads_enabled=True,
-            emergency_staffing_status=(
-                EmergencyStaffingStatus.CRITICAL_SHORTAGE_REMAINS
+            pass_two,
+            pass_two_lead_assignments,
+            lead_reporting_valid=pass_two_lead_reporting_valid,
+        )
+    )
+    overall_runtime = max(0.0, monotonic() - overall_started_at)
+    if not adopt_pass_two:
+        return _finalize_result(
+            day,
+            pass_one,
+            attempts=(
+                replace(pass_one_attempt, selected_as_final=True),
+                pass_two_attempt,
             ),
-            solver_runtime_seconds=max(0.0, monotonic() - overall_started_at),
+            emergency_leads_enabled=True,
+            disposition=disposition,
+            overall_runtime=overall_runtime,
+            disposition_warning_message=disposition_message,
         )
 
-    lead_assignments, lead_warnings = _derive_emergency_lead_assignments(
-        day, pass_two
-    )
-    pass_two_needs = _critical_flight_needs(pass_two)
-    return replace(
+    return _finalize_result(
+        day,
         pass_two,
-        attempts=(pass_one_attempt, pass_two_attempt),
-        warnings=(
-            pass_two.warnings
-            + lead_warnings
-            + _remaining_critical_shortage_warnings(pass_two, pass_two_needs)
+        attempts=(
+            pass_one_attempt,
+            replace(pass_two_attempt, selected_as_final=True),
         ),
-        emergency_lead_staffing_used=bool(lead_assignments),
         emergency_leads_enabled=True,
-        emergency_staffing_status=(
-            EmergencyStaffingStatus.CRITICAL_SHORTAGE_REMAINS
-            if pass_two_needs
-            else EmergencyStaffingStatus.LEAD_ASSISTED_SCHEDULE
-            if lead_assignments
-            else EmergencyStaffingStatus.NORMAL_SCHEDULE
-        ),
-        lead_assignments=lead_assignments,
-        solver_runtime_seconds=max(0.0, monotonic() - overall_started_at),
+        disposition=disposition,
+        overall_runtime=overall_runtime,
+        ordinary_result=pass_one,
     )
 
 
@@ -260,6 +317,198 @@ def _run_optimization_pass(
         )
     )
     return result, len(model_data.lead_decisions)
+
+
+def _result_has_usable_schedule(
+    day: OperationalDay, result: OptimizationResult
+) -> bool:
+    """Validate that a complete public schedule can safely be considered."""
+
+    if result.status not in {OptimizationStatus.OPTIMAL, OptimizationStatus.FEASIBLE}:
+        return False
+    if len(result.flight_results) != len(day.flights):
+        return False
+    if tuple(item.flight for item in result.flight_results) != day.flights:
+        return False
+    if len({item.employee_id for item in result.employee_results}) != len(
+        result.employee_results
+    ):
+        return False
+    known_employee_ids = {
+        employee.employee_id.strip().casefold() for employee in day.employees
+    }
+    reported_employee_ids = {
+        employee.employee_id.strip().casefold()
+        for employee in result.employee_results
+    }
+    if not reported_employee_ids <= known_employee_ids:
+        return False
+    if not all(
+        len(set(flight.assigned_employee_ids)) == len(flight.assigned_employee_ids)
+        and all(
+            employee_id.strip().casefold() in known_employee_ids
+            for employee_id in flight.assigned_employee_ids
+        )
+        for flight in result.flight_results
+    ):
+        return False
+    assigned_counts: dict[str, int] = {}
+    for flight in result.flight_results:
+        for employee_id in flight.assigned_employee_ids:
+            normalized_id = employee_id.strip().casefold()
+            assigned_counts[normalized_id] = assigned_counts.get(normalized_id, 0) + 1
+    if not set(assigned_counts) <= reported_employee_ids:
+        return False
+    if any(
+        employee.flight_count
+        != assigned_counts.get(employee.employee_id.strip().casefold(), 0)
+        for employee in result.employee_results
+    ):
+        return False
+    return all(
+        flight.staffing_count == len(flight.assigned_employee_ids)
+        and flight.minimum_met is (flight.staffing_count >= flight.minimum_staff)
+        and flight.minimum_shortfall
+        == max(0, flight.minimum_staff - flight.staffing_count)
+        and flight.staffing_count <= flight.maximum_staff
+        and (
+            flight.push_covered is None and flight.close_covered is None
+            if flight.flight_type is FlightType.ARRIVAL_ONLY
+            else isinstance(flight.push_covered, bool)
+            and isinstance(flight.close_covered, bool)
+        )
+        for flight in result.flight_results
+    )
+
+
+def _critical_operational_score(
+    day: OperationalDay, result: OptimizationResult
+) -> _CriticalOperationalScore | None:
+    """Reconstruct every pre-Lead objective needed for safe pass adoption."""
+
+    if not _result_has_usable_schedule(day, result):
+        return None
+    required_flights = tuple(
+        flight
+        for flight in result.flight_results
+        if flight.flight_type is not FlightType.ARRIVAL_ONLY
+        and flight.minimum_met
+    )
+    shortfalls = tuple(
+        flight.minimum_shortfall for flight in result.flight_results
+    )
+    return _CriticalOperationalScore(
+        minimum_staffed_flights=sum(
+            flight.minimum_met for flight in result.flight_results
+        ),
+        qualification_compliant_flights=sum(
+            bool(flight.push_covered) and bool(flight.close_covered)
+            for flight in required_flights
+        ),
+        individual_qualification_coverage=sum(
+            int(bool(flight.push_covered)) + int(bool(flight.close_covered))
+            for flight in required_flights
+        ),
+        total_minimum_shortfall=sum(shortfalls),
+        largest_minimum_shortfall=max(shortfalls, default=0),
+        known_unsatisfied_breaks=sum(
+            employee.break_status is BreakStatus.UNSATISFIED
+            for employee in result.employee_results
+        ),
+    )
+
+
+_LATER_OBJECTIVE_DIRECTIONS: tuple[tuple[str, bool], ...] = (
+    ("preferred_staffed_flights", True),
+    ("total_preferred_shortfall", False),
+    ("partial_crew_individual_qualification_coverage", True),
+    ("raw_flight_count_spread", False),
+    ("total_pairwise_flight_count_difference", False),
+    ("maximum_consecutive_flight_streak", False),
+    ("total_employee_longest_streaks", False),
+    ("total_shift_adjusted_flight_count_deviation", False),
+    ("adjusted_workload_spread", False),
+    ("total_pairwise_adjusted_workload_difference", False),
+    ("total_continuity_retention", True),
+)
+
+
+def _has_proven_later_objective_improvement(
+    ordinary_result: OptimizationResult,
+    emergency_result: OptimizationResult,
+) -> bool:
+    """Compare later objectives by validated names, never by shifted positions."""
+
+    ordinary = {item.name: item for item in ordinary_result.objective_values}
+    emergency = {item.name: item for item in emergency_result.objective_values}
+    for name, maximize in _LATER_OBJECTIVE_DIRECTIONS:
+        ordinary_value = ordinary.get(name)
+        emergency_value = emergency.get(name)
+        if ordinary_value is None or emergency_value is None:
+            return False
+        if not ordinary_value.proven_optimal or not emergency_value.proven_optimal:
+            return False
+        if ordinary_value.value == emergency_value.value:
+            continue
+        return (
+            emergency_value.value > ordinary_value.value
+            if maximize
+            else emergency_value.value < ordinary_value.value
+        )
+    return False
+
+
+def _emergency_adoption_decision(
+    day: OperationalDay,
+    ordinary_result: OptimizationResult,
+    emergency_result: OptimizationResult,
+    lead_assignments: tuple[EmergencyLeadAssignmentResult, ...],
+    *,
+    lead_reporting_valid: bool,
+) -> tuple[bool, EmergencyPassDisposition, str | None]:
+    """Choose Pass 2 only when its reconstructed critical outcome is safe."""
+
+    ordinary_score = _critical_operational_score(day, ordinary_result)
+    emergency_score = _critical_operational_score(day, emergency_result)
+    if (
+        ordinary_score is None
+        or emergency_score is None
+        or not lead_reporting_valid
+    ):
+        return (
+            False,
+            EmergencyPassDisposition.ATTEMPTED_NOT_ADOPTED_UNUSABLE,
+            "Emergency recovery returned no safely comparable usable "
+            "schedule; Pass 1 was retained.",
+        )
+    if emergency_score.comparison_key < ordinary_score.comparison_key:
+        return (
+            False,
+            EmergencyPassDisposition.ATTEMPTED_NOT_ADOPTED_WORSE,
+            "Emergency recovery had a worse critical operational outcome; "
+            "Pass 1 was retained.",
+        )
+    if emergency_score.comparison_key > ordinary_score.comparison_key:
+        adopted = True
+    else:
+        adopted = bool(lead_assignments) or _has_proven_later_objective_improvement(
+            ordinary_result, emergency_result
+        )
+    if not adopted:
+        return (
+            False,
+            EmergencyPassDisposition.ATTEMPTED_NOT_ADOPTED_NO_IMPROVEMENT,
+            "Emergency recovery did not improve the safely comparable "
+            "schedule; Pass 1 was retained.",
+        )
+    has_remaining_shortage = bool(_critical_flight_needs(emergency_result))
+    return (
+        True,
+        EmergencyPassDisposition.ATTEMPTED_ADOPTED_WITH_REMAINING_SHORTAGE
+        if has_remaining_shortage
+        else EmergencyPassDisposition.ATTEMPTED_AND_ADOPTED,
+        None,
+    )
 
 
 def _critical_flight_needs(
@@ -321,21 +570,22 @@ def _lead_assignment_count(
         employee.employee_id.strip().casefold(): index
         for index, employee in enumerate(day.employees)
     }
-    return sum(
-        _result_assignment_uses_lead_shift(
-            day,
-            employee_indices[employee_id.strip().casefold()],
-            flight_result,
-        )
-        for flight_result in result.flight_results
-        for employee_id in flight_result.assigned_employee_ids
-    )
+    count = 0
+    for flight_result in result.flight_results:
+        for employee_id in flight_result.assigned_employee_ids:
+            employee_index = employee_indices.get(employee_id.strip().casefold())
+            if employee_index is not None and _result_assignment_uses_lead_shift(
+                day, employee_index, flight_result
+            ):
+                count += 1
+    return count
 
 
 def _attempt_summary(
     day: OperationalDay,
     result: OptimizationResult,
     *,
+    pass_number: int,
     included_leads: bool,
     lead_candidate_count: int,
 ) -> OptimizationAttemptSummary:
@@ -358,6 +608,25 @@ def _attempt_summary(
         critical_shortage_count=_critical_shortage_count(needs),
         lead_candidate_count=lead_candidate_count,
         solver_runtime_seconds=result.solver_runtime_seconds,
+        pass_number=pass_number,
+        attempt_label=(
+            "RAMP_AGENT_ONLY" if pass_number == 1 else "EMERGENCY_LEAD_RECOVERY"
+        ),
+        usable_schedule=_result_has_usable_schedule(day, result),
+        known_unsatisfied_required_break_count=sum(
+            employee.break_status is BreakStatus.UNSATISFIED
+            for employee in result.employee_results
+        ),
+        objective_stages_completed=sum(
+            objective.proven_optimal for objective in result.objective_values
+        ),
+        all_objectives_proven_optimal=(
+            bool(result.objective_values)
+            and all(
+                objective.proven_optimal
+                for objective in result.objective_values
+            )
+        ),
     )
 
 
@@ -372,6 +641,8 @@ def _flight_label(flight_result: FlightAssignmentResult) -> str:
 def _derive_emergency_lead_assignments(
     day: OperationalDay,
     result: OptimizationResult,
+    *,
+    ordinary_result: OptimizationResult,
 ) -> tuple[
     tuple[EmergencyLeadAssignmentResult, ...],
     tuple[ScheduleWarning, ...],
@@ -384,7 +655,9 @@ def _derive_emergency_lead_assignments(
     }
     assignments: list[EmergencyLeadAssignmentResult] = []
     warnings: list[ScheduleWarning] = []
-    for flight_result in result.flight_results:
+    assert len(ordinary_result.flight_results) == len(result.flight_results)
+    for flight_index, flight_result in enumerate(result.flight_results):
+        ordinary_flight = ordinary_result.flight_results[flight_index]
         assigned_indices = tuple(
             employee_indices[employee_id.strip().casefold()]
             for employee_id in flight_result.assigned_employee_ids
@@ -399,7 +672,10 @@ def _derive_emergency_lead_assignments(
                 index for index in assigned_indices if index != employee_index
             )
             reasons: list[EmergencyLeadReason] = []
-            if flight_result.staffing_count <= flight_result.minimum_staff:
+            if (
+                not ordinary_flight.minimum_met
+                and flight_result.staffing_count <= flight_result.minimum_staff
+            ):
                 reasons.append(EmergencyLeadReason.MINIMUM_STAFFING)
             if (
                 flight_result.minimum_met
@@ -407,6 +683,10 @@ def _derive_emergency_lead_assignments(
             ):
                 if (
                     Qualification.PUSH in employee.qualifications
+                    and (
+                        not ordinary_flight.minimum_met
+                        or not bool(ordinary_flight.push_covered)
+                    )
                     and not any(
                         Qualification.PUSH in day.employees[index].qualifications
                         for index in other_indices
@@ -415,6 +695,10 @@ def _derive_emergency_lead_assignments(
                     reasons.append(EmergencyLeadReason.PUSH_QUALIFICATION)
                 if (
                     Qualification.CLOSE_OUT in employee.qualifications
+                    and (
+                        not ordinary_flight.minimum_met
+                        or not bool(ordinary_flight.close_covered)
+                    )
                     and not any(
                         Qualification.CLOSE_OUT
                         in day.employees[index].qualifications
@@ -422,7 +706,8 @@ def _derive_emergency_lead_assignments(
                     )
                 ):
                     reasons.append(EmergencyLeadReason.CLOSE_QUALIFICATION)
-            assert reasons
+            if not reasons:
+                continue
 
             label = _flight_label(flight_result)
             reason_text = {
@@ -452,11 +737,7 @@ def _derive_emergency_lead_assignments(
             )
             warnings.append(
                 ScheduleWarning(
-                    code=(
-                        WarningCode.LEAD_STAFFING_REQUIRED
-                        if EmergencyLeadReason.MINIMUM_STAFFING in reasons
-                        else WarningCode.LEAD_QUALIFICATION_REQUIRED
-                    ),
+                    code=WarningCode.EMERGENCY_LEAD_USED,
                     severity=WarningSeverity.INFO,
                     message=message,
                     arrival_flight_number=(
@@ -471,7 +752,26 @@ def _derive_emergency_lead_assignments(
     return tuple(assignments), tuple(warnings)
 
 
-def _remaining_critical_shortage_warnings(
+def _unresolved_flight_needs(
+    result: OptimizationResult,
+) -> tuple[_CriticalFlightNeed, ...]:
+    """Return every final flight issue, including qualifications below minimum."""
+
+    needs: list[_CriticalFlightNeed] = []
+    for flight_index, flight in enumerate(result.flight_results):
+        qualification_required = flight.flight_type is not FlightType.ARRIVAL_ONLY
+        need = _CriticalFlightNeed(
+            flight_index=flight_index,
+            below_minimum=not flight.minimum_met,
+            missing_push=qualification_required and not bool(flight.push_covered),
+            missing_close=qualification_required and not bool(flight.close_covered),
+        )
+        if need.below_minimum or need.missing_push or need.missing_close:
+            needs.append(need)
+    return tuple(needs)
+
+
+def _manual_intervention_warnings(
     result: OptimizationResult,
     needs: tuple[_CriticalFlightNeed, ...],
 ) -> tuple[ScheduleWarning, ...]:
@@ -487,12 +787,12 @@ def _remaining_critical_shortage_warnings(
             defects.append("close-out qualification")
         warnings.append(
             ScheduleWarning(
-                code=WarningCode.CRITICAL_SHORTAGE_REMAINS,
+                code=WarningCode.MANUAL_INTERVENTION_REQUIRED,
                 severity=WarningSeverity.CRITICAL,
                 message=(
-                    f"{_flight_label(flight_result)} still lacks "
+                    f"{_flight_label(flight_result)} requires manual intervention: "
                     + ", ".join(defects)
-                    + " after emergency Lead staffing."
+                    + "."
                 ),
                 arrival_flight_number=(
                     flight_result.flight.arrival_flight_number
@@ -503,6 +803,198 @@ def _remaining_critical_shortage_warnings(
             )
         )
     return tuple(warnings)
+
+
+def _deduplicate_warnings(
+    warnings: tuple[ScheduleWarning, ...],
+) -> tuple[ScheduleWarning, ...]:
+    """Deduplicate exact structured subjects while retaining stable order."""
+
+    seen: set[tuple[WarningCode, str | None, str | None, str | None]] = set()
+    unique: list[ScheduleWarning] = []
+    for warning in warnings:
+        identity = (
+            warning.code,
+            warning.employee_id,
+            warning.arrival_flight_number,
+            warning.departure_flight_number,
+        )
+        if identity in seen:
+            continue
+        seen.add(identity)
+        unique.append(warning)
+    return tuple(unique)
+
+
+def _derive_schedule_summary(
+    result: OptimizationResult,
+    warnings: tuple[ScheduleWarning, ...],
+    lead_assignments: tuple[EmergencyLeadAssignmentResult, ...],
+) -> ScheduleSummary:
+    """Build the public summary strictly from final public result records."""
+
+    required_flights = tuple(
+        flight
+        for flight in result.flight_results
+        if flight.flight_type is not FlightType.ARRIVAL_ONLY
+    )
+    return ScheduleSummary(
+        total_flights=len(result.flight_results),
+        minimum_staffed_flights=sum(
+            flight.minimum_met for flight in result.flight_results
+        ),
+        below_minimum_flights=sum(
+            not flight.minimum_met for flight in result.flight_results
+        ),
+        preferred_staffed_flights=sum(
+            flight.preferred_met for flight in result.flight_results
+        ),
+        qualification_required_flights=len(required_flights),
+        qualification_compliant_flights=sum(
+            bool(flight.push_covered) and bool(flight.close_covered)
+            for flight in required_flights
+        ),
+        missing_push_flights=sum(
+            not bool(flight.push_covered) for flight in required_flights
+        ),
+        missing_close_out_flights=sum(
+            not bool(flight.close_covered) for flight in required_flights
+        ),
+        participating_employee_count=sum(
+            employee.flight_count > 0 for employee in result.employee_results
+        ),
+        employees_with_satisfied_break=sum(
+            employee.break_status is BreakStatus.SATISFIED
+            for employee in result.employee_results
+        ),
+        employees_with_unsatisfied_break=sum(
+            employee.break_status is BreakStatus.UNSATISFIED
+            for employee in result.employee_results
+        ),
+        employees_with_nonevaluable_break=sum(
+            employee.break_status
+            is BreakStatus.NOT_EVALUABLE_BETWEEN_ASSIGNMENTS
+            for employee in result.employee_results
+        ),
+        total_assignments=sum(
+            flight.staffing_count for flight in result.flight_results
+        ),
+        emergency_lead_assignments=len(lead_assignments),
+        critical_warning_count=sum(
+            warning.severity is WarningSeverity.CRITICAL for warning in warnings
+        ),
+        warning_count=len(warnings),
+        all_objectives_proven_optimal=(
+            bool(result.objective_values)
+            and all(
+                objective.proven_optimal for objective in result.objective_values
+            )
+        ),
+    )
+
+
+def _finalize_result(
+    day: OperationalDay,
+    result: OptimizationResult,
+    *,
+    attempts: tuple[OptimizationAttemptSummary, ...],
+    emergency_leads_enabled: bool,
+    disposition: EmergencyPassDisposition,
+    overall_runtime: float,
+    ordinary_result: OptimizationResult | None = None,
+    disposition_warning_message: str | None = None,
+) -> OptimizationResult:
+    """Attach deterministic operational reporting to the selected raw result."""
+
+    usable = _result_has_usable_schedule(day, result)
+    lead_assignments: tuple[EmergencyLeadAssignmentResult, ...] = ()
+    lead_warnings: tuple[ScheduleWarning, ...] = ()
+    if usable and ordinary_result is not None:
+        lead_assignments, lead_warnings = _derive_emergency_lead_assignments(
+            day,
+            result,
+            ordinary_result=ordinary_result,
+        )
+
+    unresolved_needs = _unresolved_flight_needs(result) if usable else ()
+    break_shortage = any(
+        employee.break_status is BreakStatus.UNSATISFIED
+        for employee in result.employee_results
+    )
+    disposition_warnings: tuple[ScheduleWarning, ...] = ()
+    if disposition_warning_message is not None:
+        disposition_warnings = (
+            ScheduleWarning(
+                code=WarningCode.EMERGENCY_RECOVERY_NOT_ADOPTED,
+                severity=WarningSeverity.WARNING,
+                message=disposition_warning_message,
+            ),
+        )
+
+    reporting_warnings: list[ScheduleWarning] = []
+    if not usable:
+        reporting_warnings.append(
+            ScheduleWarning(
+                code=WarningCode.NO_USABLE_SCHEDULE,
+                severity=WarningSeverity.CRITICAL,
+                message="No usable schedule recommendation was generated.",
+            )
+        )
+    elif not result.objective_values or not all(
+        objective.proven_optimal for objective in result.objective_values
+    ):
+        reporting_warnings.append(
+            ScheduleWarning(
+                code=WarningCode.SOLVER_RESULT_NOT_PROVEN_OPTIMAL,
+                severity=WarningSeverity.WARNING,
+                message=(
+                    "A usable schedule was returned, but not every optimization "
+                    "stage was proven optimal."
+                ),
+            )
+        )
+
+    warnings = _deduplicate_warnings(
+        result.warnings
+        + lead_warnings
+        + disposition_warnings
+        + _manual_intervention_warnings(result, unresolved_needs)
+        + tuple(reporting_warnings)
+    )
+    readiness = (
+        OperationalReadinessStatus.NO_USABLE_SCHEDULE
+        if not usable
+        else OperationalReadinessStatus.MANUAL_INTERVENTION_REQUIRED
+        if unresolved_needs or break_shortage
+        else OperationalReadinessStatus.READY_WITH_WARNINGS
+        if warnings
+        else OperationalReadinessStatus.READY
+    )
+    emergency_status = (
+        EmergencyStaffingStatus.CRITICAL_SHORTAGE_REMAINS
+        if unresolved_needs
+        else EmergencyStaffingStatus.LEAD_ASSISTED_SCHEDULE
+        if lead_assignments
+        else EmergencyStaffingStatus.NORMAL_SCHEDULE
+    )
+    finalized = replace(
+        result,
+        attempts=attempts,
+        warnings=warnings,
+        emergency_lead_staffing_used=bool(lead_assignments),
+        emergency_leads_enabled=emergency_leads_enabled,
+        emergency_staffing_status=emergency_status,
+        emergency_pass_disposition=disposition,
+        lead_assignments=lead_assignments,
+        solver_runtime_seconds=overall_runtime,
+        operational_readiness=readiness,
+    )
+    return replace(
+        finalized,
+        schedule_summary=_derive_schedule_summary(
+            finalized, warnings, lead_assignments
+        ),
+    )
 
 
 def optimize_minimum_staffing(

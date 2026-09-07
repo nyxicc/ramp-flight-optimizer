@@ -5,7 +5,7 @@ from synthetic operational data.
 
 ## Current scope
 
-Milestones 1-11 are implemented. The repository currently provides:
+Milestones 1-13 are implemented. The repository currently provides:
 
 - immutable employee, shift, flight, and result domain models;
 - structured input validation;
@@ -18,10 +18,10 @@ Milestones 1-11 are implemented. The repository currently provides:
 - a limited CP-SAT optimizer for staffing, push and close-out qualification
   coverage, required between-assignment breaks, raw flight-count fairness, and
   consecutive-flight, shift-length, adjusted-workload, and emergent team-
-  continuity preferences.
-
-Emergency Lead solving, expanded warnings/reporting, and later integration work
-are not implemented yet.
+  continuity preferences;
+- controlled second-pass emergency Lead recovery;
+- structured operational readiness, warnings, attempt audit data, schedule
+  summaries, and deterministic plain-text reporting.
 
 ## Employee and availability model
 
@@ -335,8 +335,8 @@ flights.
 Disabled employees, Leads, non-ramp and unknown roles, employees without an
 ordinary-policy shift, and employees with neither an opportunity nor a fixed
 assignment are excluded from fairness. `allow_leads_for_minimum_staffing=True`
-does not add Leads to this ordinary pass; it is reserved for the later emergency
-Lead solver. Population order follows the input employee order.
+does not add Leads to this ordinary pass; it is reserved for the optional
+emergency second pass. Population order follows the input employee order.
 
 The model counts each selected or fixed aircraft movement once. Arrival-only,
 departure-only, and turn movements therefore each add one; a turn's two flight
@@ -596,8 +596,72 @@ and Lead candidate-variable count. `emergency_staffing_status` distinguishes
 `CRITICAL_SHORTAGE_REMAINS`. Each `lead_assignments` item states the flight,
 Lead, and independently reconstructed minimum/push/close reason. Structured
 informational warnings expose successful Lead interventions; if an attempted
-fallback remains insufficient, a critical warning identifies each affected
-flight.
+fallback remains insufficient, a structured manual-intervention warning
+identifies each affected flight.
+
+### Operational readiness and reporting
+
+Milestones 1–13 are implemented. `OptimizationStatus` continues to describe
+the computation (`OPTIMAL`, `FEASIBLE`, `INFEASIBLE`, or `UNKNOWN`), while the
+separate `OperationalReadinessStatus` describes the recommendation:
+
+- `READY`: a usable schedule has no unresolved staffing, qualification, or
+  break requirement and no reporting warning;
+- `READY_WITH_WARNINGS`: operations are covered, but information such as
+  emergency Lead use or incomplete optimality needs acknowledgment;
+- `MANUAL_INTERVENTION_REQUIRED`: a usable partial recommendation has an
+  unresolved minimum, qualification, or required-break issue;
+- `NO_USABLE_SCHEDULE`: no complete recommendation was returned.
+
+An `OPTIMAL` partial schedule may therefore still require manual intervention.
+The emergency-pass disposition separately records disabled, enabled-but-not-
+needed, adopted, adopted-with-shortages, unusable, worse, and no-improvement
+outcomes. This state is explicit rather than inferred from attempt count.
+
+Pass 2 is never adopted merely because it contains flight rows. Both pass
+results are independently reconstructed into this lexicographic critical
+score: minimum-staffed flights, minimum-staffed qualification-compliant
+flights, individual qualification coverage on those flights, total minimum
+shortfall, largest shortfall, and known unsatisfied breaks. A Pass-2 result
+must be usable and no worse under that exact ordering. It is selected only when
+it improves the critical score, or preserves it while supplying a valid Lead
+intervention or a proven later-stage improvement. `UNKNOWN`, `INFEASIBLE`,
+empty, structurally incomplete, incomparable, and worse emergency results fall
+back to Pass 1. Both attempts remain reported, and discarded Lead assignments
+never appear in the final result.
+
+Every attempt summary includes its pass number and stable label, Lead policy,
+solver status, usable/selected flags, coverage and shortage counts, unsatisfied
+break count, Lead candidates and assignments, completed objective records,
+optimality completion, and runtime. The final immutable `ScheduleSummary`
+derives its flight, qualification, break, participation, assignment, Lead,
+warning, and optimality counts from public final records. Arrival-only flights
+are excluded from qualification denominators; non-evaluable breaks are counted
+separately.
+
+Warnings remain machine-identifiable. Flight shortages appear first in input
+flight order (minimum, push, close-out), followed by employee breaks in input
+employee order, emergency Lead information in assignment order, emergency
+disposition warnings, per-flight manual escalations, and solver-optimality
+warnings. Identical structured subjects are deduplicated by warning code,
+employee ID, arrival flight number, and departure flight number without
+collapsing distinct flights, employees, push/close causes, or Lead
+interventions. Break failures make readiness manual but do not receive a
+redundant second warning.
+
+`format_optimization_report(result)` is a pure deterministic plain-text
+renderer. It includes readiness, computational status, emergency disposition,
+coverage, qualifications, breaks, Lead interventions, warnings, core fairness
+and continuity metrics, overall runtime, and per-pass audit lines. It performs
+no printing or file I/O and handles ordinary, partial, emergency, empty-day,
+and no-schedule results.
+
+Each solver pass retains its own configured time budget. Overall runtime is the
+wall-clock duration across model construction, every attempted pass, and pass
+selection; small result-finalization overhead and later formatter calls are not
+timed. It is never mislabeled as the chosen pass runtime, and is normally at
+least the sum of recorded pass runtimes. The per-attempt runtimes remain
+independently visible.
 
 Each proven optimum is fixed before solving the next stage. Sequential solves
 preserve true priority without arbitrary giant weights, and all stages share
@@ -659,8 +723,9 @@ including a factual zero/empty value when no flight pair is horizon-eligible.
 Its transition records reference the original immutable `Flight` values and
 list exactly which employees appear in both final crews.
 
-This optimizer is not operationally complete. It does not implement Milestone
-13 or later features.
+This optimizer is not operationally complete. Milestone 14 full synthetic-day
+and torture testing and Milestone 15 final benchmarking, documentation review,
+and polish remain. No production UI or API is included.
 
 ## TeamWork schedule import
 

@@ -228,7 +228,7 @@ def test_lead_recovers_one_missing_qualification(
     assert solved.push_covered and solved.close_covered
     assert assigned_leads(result) == ("L1",)
     assert reason in result.lead_assignments[0].reasons
-    assert WarningCode.LEAD_QUALIFICATION_REQUIRED in {
+    assert WarningCode.EMERGENCY_LEAD_USED in {
         warning.code for warning in result.warnings
     }
 
@@ -366,7 +366,7 @@ def test_best_partial_schedule_is_returned_when_leads_are_insufficient() -> None
     assert result.emergency_staffing_status is (
         EmergencyStaffingStatus.CRITICAL_SHORTAGE_REMAINS
     )
-    assert WarningCode.CRITICAL_SHORTAGE_REMAINS in {
+    assert WarningCode.MANUAL_INTERVENTION_REQUIRED in {
         warning.code for warning in result.warnings
     }
 

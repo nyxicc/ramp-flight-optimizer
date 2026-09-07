@@ -587,6 +587,8 @@ def test_flight_and_break_warnings_coexist_in_deterministic_order() -> None:
         WarningCode.PUSH_QUALIFICATION_NOT_MET,
         WarningCode.CLOSE_QUALIFICATION_NOT_MET,
         WarningCode.REQUIRED_BREAK_NOT_MET,
+        WarningCode.MANUAL_INTERVENTION_REQUIRED,
+        WarningCode.MANUAL_INTERVENTION_REQUIRED,
     )
 
 

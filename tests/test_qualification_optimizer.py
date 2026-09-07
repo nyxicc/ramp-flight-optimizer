@@ -223,7 +223,9 @@ def test_empty_required_flight_has_both_coverage_warnings_with_staffing_warning(
         WarningCode.PUSH_QUALIFICATION_NOT_MET,
         WarningCode.CLOSE_QUALIFICATION_NOT_MET,
     )
-    assert result.warnings == flight_result.warnings
+    assert result.warnings[:3] == flight_result.warnings
+    assert result.warnings[3].code is WarningCode.MANUAL_INTERVENTION_REQUIRED
+    assert result.warnings[3].departure_flight_number == "101"
     assert result.status is OptimizationStatus.OPTIMAL
 
 

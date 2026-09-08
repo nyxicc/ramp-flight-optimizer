@@ -57,6 +57,16 @@ from ramp_optimizer.optimizer import (
     optimize_minimum_staffing,
 )
 from ramp_optimizer.reporting import format_optimization_report
+from ramp_optimizer.sample_data import (
+    SAMPLE_DATE,
+    SAMPLE_SCENARIO_NAMES,
+    SAMPLE_TIMEZONE,
+    SampleScenario,
+    build_emergency_lead_scenario,
+    build_normal_scenario,
+    build_sample_scenario,
+    build_staffing_shortage_scenario,
+)
 from ramp_optimizer.staffing import StaffingRequirements, staffing_requirements_for
 from ramp_optimizer.timing import (
     FlightDerivationError,
@@ -96,6 +106,10 @@ __all__ = [
     "adjusted_assignment_workload_units",
     "BreakStatus",
     "build_candidate_assignments",
+    "build_emergency_lead_scenario",
+    "build_normal_scenario",
+    "build_sample_scenario",
+    "build_staffing_shortage_scenario",
     "CandidateAssignment",
     "ContinuityMetrics",
     "ContinuityTransitionResult",
@@ -145,6 +159,10 @@ __all__ = [
     "position_mapping",
     "parse_numeric_flight_number",
     "role_is_assignment_eligible",
+    "SAMPLE_DATE",
+    "SAMPLE_SCENARIO_NAMES",
+    "SAMPLE_TIMEZONE",
+    "SampleScenario",
     "ScheduleImportResult",
     "ScheduleSummary",
     "ScheduleWarning",

@@ -209,7 +209,7 @@ def test_non_string_flight_number_raises_narrow_exception() -> None:
 
 @pytest.mark.parametrize(
     ("number", "expected_express"),
-    [("2999", False), ("3000", True), ("3001", True)],
+    [("2999", False), ("3000", False), ("3001", True)],
 )
 def test_default_express_threshold(number: str, expected_express: bool) -> None:
     facts = derive_flight_operational_facts(arrival(number), OptimizerConfig())
@@ -221,7 +221,8 @@ def test_custom_express_threshold() -> None:
     config = replace(OptimizerConfig(), express_threshold=4000)
 
     assert not derive_flight_operational_facts(departure("3999"), config).express
-    assert derive_flight_operational_facts(departure("4000"), config).express
+    assert not derive_flight_operational_facts(departure("4000"), config).express
+    assert derive_flight_operational_facts(departure("4001"), config).express
 
 
 def test_operational_facts_include_directional_numbers_for_each_type() -> None:
@@ -251,7 +252,7 @@ def test_turns_require_and_report_one_service_category(
 
 def test_mixed_category_turn_raises_instead_of_choosing_a_side() -> None:
     with pytest.raises(FlightDerivationError, match="same service category"):
-        derive_flight_operational_facts(turn("2999", "3000"), OptimizerConfig())
+        derive_flight_operational_facts(turn("2999", "3001"), OptimizerConfig())
 
 
 def test_malformed_number_cannot_be_classified_as_mainline() -> None:

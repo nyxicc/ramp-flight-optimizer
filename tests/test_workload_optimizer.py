@@ -121,15 +121,15 @@ def results_by_id(result) -> dict[str, object]:
     ("number", "staffing_count", "heavy", "expected_units", "expected_public"),
     [
         ("100", 4, False, 10_000, 1.00),
-        ("3000", 4, False, 8_000, 0.80),
+        ("3001", 4, False, 8_000, 0.80),
         ("100", 3, False, 11_500, 1.15),
-        ("3000", 3, False, 9_200, 0.92),
+        ("3001", 3, False, 9_200, 0.92),
         ("100", 2, False, 10_000, 1.00),
-        ("3000", 2, False, 8_000, 0.80),
+        ("3001", 2, False, 8_000, 0.80),
         ("100", 5, True, 10_000, 1.00),
         ("100", 3, True, 11_500, 1.15),
-        ("3000", 5, True, 8_000, 0.80),
-        ("3000", 3, True, 9_200, 0.92),
+        ("3001", 5, True, 8_000, 0.80),
+        ("3001", 3, True, 9_200, 0.92),
     ],
 )
 def test_pure_workload_derivation_default_combinations(
@@ -159,7 +159,7 @@ def test_custom_exact_factors_preserve_the_product_without_early_rounding() -> N
         three_person_workload_multiplier=1.125,
         workload_scale=1000,
     )
-    facts = derive_flight_operational_facts(arrival("3000", 9), config)
+    facts = derive_flight_operational_facts(arrival("3001", 9), config)
 
     units = adjusted_assignment_workload_units(facts, 3, config)
 
@@ -280,7 +280,7 @@ def test_fixed_employee_counts_toward_exactly_three_staffed_workload() -> None:
 def test_two_mainline_and_two_express_flights_balance_one_of_each() -> None:
     flights = (
         arrival("100", 9),
-        arrival("3000", 10, 30),
+        arrival("3002", 10, 30),
         arrival("101", 12),
         arrival("3001", 13, 30),
     )
@@ -302,7 +302,7 @@ def test_two_mainline_and_two_express_flights_balance_one_of_each() -> None:
 
 def test_three_person_work_is_assigned_to_reduce_existing_workload_gap() -> None:
     baseline = (
-        arrival("3000", 9),
+        arrival("3001", 9),
         arrival("101", 9),
         arrival("102", 9),
         arrival("103", 9),
@@ -335,7 +335,7 @@ def test_three_person_work_is_assigned_to_reduce_existing_workload_gap() -> None
 
 
 def test_express_exactly_three_combines_to_point_nine_two() -> None:
-    flight = arrival("3000", 9)
+    flight = arrival("3001", 9)
     workers = tuple(employee(worker_id) for worker_id in ("A", "B", "C"))
 
     result = optimize_flight_assignments(
@@ -348,7 +348,7 @@ def test_express_exactly_three_combines_to_point_nine_two() -> None:
 
 
 def test_pairwise_workload_stage_improves_tied_interior_distribution() -> None:
-    first_three = arrival("3000", 8)
+    first_three = arrival("3005", 8)
     first_single = arrival("3001", 8, heavy=True)
     second_three = arrival("100", 10)
     second_single = arrival("3002", 10, heavy=True)
@@ -394,7 +394,7 @@ def test_workload_never_worsens_raw_count_fairness() -> None:
     flights = (
         arrival("100", 9),
         arrival("101", 10, 30),
-        arrival("3000", 12),
+        arrival("3002", 12),
         arrival("3001", 13, 30),
     )
     result = optimize_flight_assignments(
@@ -408,7 +408,7 @@ def test_workload_never_worsens_raw_count_fairness() -> None:
 
 def test_workload_never_worsens_shift_length_adjustment() -> None:
     flights = (
-        arrival("3000", 9),
+        arrival("3002", 9),
         arrival("3001", 10),
         arrival("100", 11),
     )
@@ -459,7 +459,7 @@ def test_workload_stages_preserve_operational_qualification_break_and_preferred(
 
 
 def test_reporting_is_reconstructed_from_final_assignments() -> None:
-    flights = (arrival("100", 9), arrival("3000", 11))
+    flights = (arrival("100", 9), arrival("3001", 11))
     workers = tuple(employee(worker_id) for worker_id in ("A", "B", "C"))
     config = staffing_config(3)
     result = optimize_flight_assignments(day_for(flights, workers), config)
@@ -544,7 +544,7 @@ def test_enabled_configured_roles_receive_reported_workload(
     config_change: str,
 ) -> None:
     worker = employee("E1")
-    flight = arrival("3000", 9)
+    flight = arrival("3001", 9)
     result = optimize_flight_assignments(
         day_for(
             (flight,),
@@ -597,7 +597,7 @@ def test_ordinary_nonparticipant_reports_factual_zero_workload() -> None:
 
 
 def test_overnight_express_assignment_reports_workload() -> None:
-    flight = arrival("3000", 0, 30, day=3)
+    flight = arrival("3001", 0, 30, day=3)
     result = optimize_flight_assignments(
         day_for(
             (flight,),
@@ -641,7 +641,7 @@ def test_time_budget_exhaustion_before_stage_15_preserves_stage_14(
     monkeypatch,
 ) -> None:
     day = day_for(
-        (arrival("100", 9), arrival("3000", 11)),
+        (arrival("100", 9), arrival("3001", 11)),
         (employee("A"), employee("B")),
     )
     config = staffing_config(1, solver_time_limit_seconds=1.0)
@@ -681,7 +681,7 @@ def test_workload_stage_timeout_preserves_last_proven_solution(
     expected_last_stage: int,
 ) -> None:
     day = day_for(
-        (arrival("100", 9), arrival("3000", 11)),
+        (arrival("100", 9), arrival("3001", 11)),
         (employee("A"), employee("B")),
     )
     real_solver_type = cp_model.CpSolver

@@ -119,12 +119,12 @@ def derive_flight_operational_facts(
         else None
     )
     arrival_express = (
-        arrival_number >= config.express_threshold
+        arrival_number > config.express_threshold
         if arrival_number is not None
         else None
     )
     departure_express = (
-        departure_number >= config.express_threshold
+        departure_number > config.express_threshold
         if departure_number is not None
         else None
     )

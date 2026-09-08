@@ -135,7 +135,7 @@ def _manual_facts(
         match = _NUMBER.fullmatch(number.strip())
         assert match is not None
         parsed.append(int(match.group(1)))
-    categories = {value >= config.express_threshold for value in parsed}
+    categories = {value > config.express_threshold for value in parsed}
     assert len(categories) == 1
     return flight_type, start, end, categories.pop()
 

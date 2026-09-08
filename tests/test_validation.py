@@ -291,9 +291,9 @@ def test_invalid_directional_datetime_is_reported_without_arithmetic() -> None:
 
 def test_mixed_mainline_and_express_turn_is_rejected() -> None:
     turn = Flight(
-        arrival_flight_number="2999",
+        arrival_flight_number="3000",
         arrival_time=datetime(2026, 9, 2, 8),
-        departure_flight_number="3000",
+        departure_flight_number="3001",
         departure_time=datetime(2026, 9, 2, 9),
     )
 

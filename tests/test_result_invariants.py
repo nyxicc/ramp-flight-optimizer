@@ -201,7 +201,7 @@ def test_increasing_solver_time_cannot_worsen_lexicographic_result() -> None:
 
 
 def test_express_threshold_changes_only_category_dependent_workload() -> None:
-    target = arrival("FX3000", at(9))
+    target = arrival("FX3001", at(9))
     worker = synthetic_employee("R001")
     day = operational_day(
         employees=(worker,),

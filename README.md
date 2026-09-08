@@ -118,8 +118,8 @@ crossing midnight must explicitly give its departure the following date.
 Numeric parsing accepts values such as `1428`, `UA123`, and `OO3550`, preserves
 the original display value on `Flight`, and rejects values without a terminal
 numeric portion. A movement is Express exactly when its parsed number is
-greater than or equal to `express_threshold` (3000 by default), so 2999 is
-Mainline while 3000 is Express. Both directional numbers on a turn must resolve
+greater than `express_threshold` (3000 by default), so 3000 is Mainline while
+3001 is Express. Both directional numbers on a turn must resolve
 to the same category; mixed Mainline/Express turns are invalid.
 
 Arrival numbers are unique among arrivals, and departure numbers are unique

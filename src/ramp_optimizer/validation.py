@@ -595,8 +595,8 @@ def validate_operational_day(
             arrival_complete
             and departure_complete
             and _valid_express_threshold(active_config)
-            and (arrival_number >= active_config.express_threshold)
-            != (departure_number >= active_config.express_threshold)
+            and (arrival_number > active_config.express_threshold)
+            != (departure_number > active_config.express_threshold)
         ):
             issues.append(
                 ValidationIssue(

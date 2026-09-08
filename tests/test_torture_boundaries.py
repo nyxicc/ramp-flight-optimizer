@@ -157,7 +157,7 @@ def test_directional_uniqueness_and_mixed_turn_rules() -> None:
     )
     mixed_turn = OperationalDay(
         SYNTHETIC_DATE,
-        flights=(turn("FX2999", at(8), "FX3000", at(9)),),
+        flights=(turn("FX2999", at(8), "FX3001", at(9)),),
     )
 
     assert validate_operational_day(opposite_directions) == ()

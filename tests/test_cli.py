@@ -1,5 +1,6 @@
 """Command-line adapter tests without duplicating domain reporting logic."""
 
+import json
 import subprocess
 import sys
 
@@ -69,6 +70,26 @@ def test_parser_exposes_documented_commands() -> None:
 
     assert parser.prog == "ramp-optimizer"
     assert main(["benchmark", "--scenario", "small", "--repeat", "1"]) == 0
+
+
+def test_benchmark_cli_writes_only_to_explicit_output(tmp_path, capsys) -> None:
+    output = tmp_path / "benchmark.json"
+
+    exit_code = main(
+        [
+            "benchmark",
+            "--scenario",
+            "small",
+            "--repeat",
+            "1",
+            "--output",
+            str(output),
+        ]
+    )
+
+    assert exit_code == 0
+    assert json.loads(output.read_text(encoding="utf-8"))["schema_version"] == 1
+    assert capsys.readouterr().out == f"Benchmark results written to {output}\n"
 
 
 def test_module_entry_point_help_smoke() -> None:

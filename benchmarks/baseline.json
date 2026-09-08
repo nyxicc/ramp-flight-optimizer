@@ -1,0 +1,159 @@
+{
+  "environment": {
+    "implementation": "CPython",
+    "machine": "AMD64",
+    "processor": "Intel64 Family 6 Model 170 Stepping 4, GenuineIntel",
+    "python": "3.12.0",
+    "release": "11",
+    "system": "Windows"
+  },
+  "generated_at_utc": "2026-09-08T16:24:52.421416Z",
+  "scenarios": [
+    {
+      "candidate_assignment_count": 3,
+      "description": "First three movements and their fictional morning team.",
+      "employee_count": 9,
+      "fixed_assignment_count": 9,
+      "flight_count": 3,
+      "median_solver_runtime_seconds": 0.04699999999957072,
+      "median_wall_clock_seconds": 0.042564600000332575,
+      "name": "small",
+      "repeat_count": 3,
+      "runs": [
+        {
+          "all_objectives_proven_optimal": true,
+          "objective_optimality_state": "ALL_PROVEN_OPTIMAL",
+          "objective_stage_count": 17,
+          "operational_readiness": "MANUAL_INTERVENTION_REQUIRED",
+          "optimization_attempt_count": 1,
+          "repetition": 1,
+          "solver_runtime_seconds": 0.04699999999957072,
+          "status": "OPTIMAL",
+          "wall_clock_seconds": 0.047022899999319634
+        },
+        {
+          "all_objectives_proven_optimal": true,
+          "objective_optimality_state": "ALL_PROVEN_OPTIMAL",
+          "objective_stage_count": 17,
+          "operational_readiness": "MANUAL_INTERVENTION_REQUIRED",
+          "optimization_attempt_count": 1,
+          "repetition": 2,
+          "solver_runtime_seconds": 0.03099999999994907,
+          "status": "OPTIMAL",
+          "wall_clock_seconds": 0.04215290000047389
+        },
+        {
+          "all_objectives_proven_optimal": true,
+          "objective_optimality_state": "ALL_PROVEN_OPTIMAL",
+          "objective_stage_count": 17,
+          "operational_readiness": "MANUAL_INTERVENTION_REQUIRED",
+          "optimization_attempt_count": 1,
+          "repetition": 3,
+          "solver_runtime_seconds": 0.04700000000048021,
+          "status": "OPTIMAL",
+          "wall_clock_seconds": 0.042564600000332575
+        }
+      ],
+      "solver_time_limit_seconds": 5.0
+    },
+    {
+      "candidate_assignment_count": 4,
+      "description": "First twelve movements and the fictional daytime team.",
+      "employee_count": 11,
+      "fixed_assignment_count": 36,
+      "flight_count": 12,
+      "median_solver_runtime_seconds": 0.11000000000058208,
+      "median_wall_clock_seconds": 0.11333469999954104,
+      "name": "medium",
+      "repeat_count": 3,
+      "runs": [
+        {
+          "all_objectives_proven_optimal": true,
+          "objective_optimality_state": "ALL_PROVEN_OPTIMAL",
+          "objective_stage_count": 17,
+          "operational_readiness": "READY",
+          "optimization_attempt_count": 1,
+          "repetition": 1,
+          "solver_runtime_seconds": 0.13999999999941792,
+          "status": "OPTIMAL",
+          "wall_clock_seconds": 0.12150610000026063
+        },
+        {
+          "all_objectives_proven_optimal": true,
+          "objective_optimality_state": "ALL_PROVEN_OPTIMAL",
+          "objective_stage_count": 17,
+          "operational_readiness": "READY",
+          "optimization_attempt_count": 1,
+          "repetition": 2,
+          "solver_runtime_seconds": 0.11000000000058208,
+          "status": "OPTIMAL",
+          "wall_clock_seconds": 0.11333469999954104
+        },
+        {
+          "all_objectives_proven_optimal": true,
+          "objective_optimality_state": "ALL_PROVEN_OPTIMAL",
+          "objective_stage_count": 17,
+          "operational_readiness": "READY",
+          "optimization_attempt_count": 1,
+          "repetition": 3,
+          "solver_runtime_seconds": 0.10899999999946886,
+          "status": "OPTIMAL",
+          "wall_clock_seconds": 0.11175659999935306
+        }
+      ],
+      "solver_time_limit_seconds": 5.0
+    },
+    {
+      "candidate_assignment_count": 6,
+      "description": "Fictional ready 24-movement day with overlapping work, mixed service classes, heavy turns, qualifications, breaks, fairness, and continuity.",
+      "employee_count": 21,
+      "fixed_assignment_count": 72,
+      "flight_count": 24,
+      "median_solver_runtime_seconds": 0.2649999999994179,
+      "median_wall_clock_seconds": 0.258828099999846,
+      "name": "full-day",
+      "repeat_count": 3,
+      "runs": [
+        {
+          "all_objectives_proven_optimal": true,
+          "objective_optimality_state": "ALL_PROVEN_OPTIMAL",
+          "objective_stage_count": 17,
+          "operational_readiness": "READY",
+          "optimization_attempt_count": 1,
+          "repetition": 1,
+          "solver_runtime_seconds": 0.2649999999994179,
+          "status": "OPTIMAL",
+          "wall_clock_seconds": 0.258828099999846
+        },
+        {
+          "all_objectives_proven_optimal": true,
+          "objective_optimality_state": "ALL_PROVEN_OPTIMAL",
+          "objective_stage_count": 17,
+          "operational_readiness": "READY",
+          "optimization_attempt_count": 1,
+          "repetition": 2,
+          "solver_runtime_seconds": 0.26600000000053114,
+          "status": "OPTIMAL",
+          "wall_clock_seconds": 0.26223529999970197
+        },
+        {
+          "all_objectives_proven_optimal": true,
+          "objective_optimality_state": "ALL_PROVEN_OPTIMAL",
+          "objective_stage_count": 17,
+          "operational_readiness": "READY",
+          "optimization_attempt_count": 1,
+          "repetition": 3,
+          "solver_runtime_seconds": 0.25,
+          "status": "OPTIMAL",
+          "wall_clock_seconds": 0.2570760999997219
+        }
+      ],
+      "solver_time_limit_seconds": 5.0
+    }
+  ],
+  "schema_version": 1,
+  "settings": {
+    "deterministic_solver_workers": 1,
+    "repeat_count": 3
+  }
+}

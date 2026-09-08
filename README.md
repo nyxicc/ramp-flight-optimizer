@@ -1,833 +1,229 @@
 # Ramp Team Flight Optimizer
 
-A portfolio project for generating ramp-team flight assignment recommendations
-from synthetic operational data.
+A deterministic Python decision-support engine that assigns a ramp team to a day
+of aircraft movements while preserving operational constraints and making staffing
+tradeoffs explicit. It uses OR-Tools CP-SAT and a sequential, 17-stage
+lexicographic objective hierarchy rather than one blended score.
 
-## Current scope
+> All employees, flight numbers, times, gates, qualifications, and scenarios in
+> this repository are newly constructed fictional data. This project demonstrates
+> a synthetic decision-support optimizer; it does not claim live production use.
 
-Milestones 1-14 are implemented. The repository currently provides:
+## Project status
 
-- immutable employee, shift, flight, and result domain models;
-- structured input validation;
-- a privacy-conscious importer for TeamWork daily schedule exports;
-- assignment-eligibility checks over separate availability intervals;
-- deterministic flight classification, work-window, and service-category
-  derivation;
-- pure half-open interval overlap behavior;
-- explainable employee-flight eligibility and validated candidate preprocessing;
-- a limited CP-SAT optimizer for staffing, push and close-out qualification
-  coverage, required between-assignment breaks, raw flight-count fairness, and
-  consecutive-flight, shift-length, adjusted-workload, and emergent team-
-  continuity preferences;
-- controlled second-pass emergency Lead recovery;
-- structured operational readiness, warnings, attempt audit data, schedule
-  summaries, and deterministic plain-text reporting;
-- an independently checked, entirely fictional 24-flight operational day plus
-  boundary, metamorphic, emergency-recovery, timeout, and reporting matrices.
+Phase 1—the standalone optimization engine—is complete. It includes validated
+domain models, timing and eligibility rules, assignment optimization, structured
+results and warnings, human-readable reporting, fictional demos, reproducible
+benchmarks, packaging, and automated tests.
 
-## Employee and availability model
+The repository intentionally does not include a web UI, API server, database,
+authentication, deployment, OCR, schedule-image parsing, or live airline data.
+Those integration concerns belong to a possible Phase 2.
 
-Employee identity is independent from daily schedule rows:
+## Capabilities
 
-```python
-from datetime import datetime
+- validates employees, shifts, flights, qualifications, breaks, and fixed assignments;
+- derives arrival, departure, and turn work windows with aware datetimes;
+- filters deterministic legal employee-flight candidates before solving;
+- prioritizes minimum staffing, qualification coverage, breaks, preferred staffing,
+  fairness, streak control, adjusted workload, and continuity in a fixed order;
+- can attempt an explicit emergency Lead recovery pass when enabled;
+- returns usable partial schedules when full operational goals cannot be met;
+- separates mathematical solver status from operational readiness;
+- emits stable structured warnings and a deterministic supervisor-facing report;
+- imports a validated TeamWork-format workbook without making it a live-data source;
+- supplies public fictional scenarios and a real-optimizer benchmark harness.
 
-from ramp_optimizer import Employee, EmployeeShift, OperationalRole, Qualification
+## Install
 
-employee = Employee(
-    employee_id="E001",
-    name="Avery Stone",
-    qualifications=frozenset({Qualification.PUSH}),
-)
+Python 3.12 or newer is required.
 
-shift = EmployeeShift(
-    employee_id="E001",
-    start=datetime(2026, 9, 2, 5),
-    end=datetime(2026, 9, 2, 13),
-    normalized_role=OperationalRole.RAMP_AGENT,
-)
+```bash
+python -m venv .venv
+python -m pip install -e ".[dev]"
 ```
 
-One employee may have multiple independent shifts and source-position labels.
-Those intervals are never merged into one continuous availability window.
-Qualifications come from the employee roster or explicit application input;
-schedule position text never grants a qualification.
+The editable installation provides both the `ramp-optimizer` console command and
+the equivalent `python -m ramp_optimizer` module command. Runtime dependencies are
+bounded in `pyproject.toml`; CLI, JSON, timing, platform, and statistics support
+use the Python standard library.
 
-The core shift contains no spreadsheet provenance. TeamWork source row,
-original position text, note presence, and SwapBoard state live in immutable
-`ShiftImportRecord` objects. `ScheduleImportResult.shifts` exposes only the core
-shift values needed by eligibility and the optimizer.
+## Quick start
 
-## Flight movements and derived operational facts
-
-One `Flight` represents one aircraft movement. A turn has two flight numbers
-because its inbound arrival and outbound departure are different operational
-flights. Only source facts are stored on the immutable input model:
-
-```python
-from datetime import datetime
-
-from ramp_optimizer import Flight
-
-arrival_only = Flight(
-    arrival_flight_number="1428",
-    arrival_time=datetime(2026, 9, 2, 9, 2),
-)
-departure_only = Flight(
-    departure_flight_number="2690",
-    departure_time=datetime(2026, 9, 2, 6, 0),
-)
-turn = Flight(
-    arrival_flight_number="1428",
-    arrival_time=datetime(2026, 9, 2, 9, 2),
-    departure_flight_number="1814",
-    departure_time=datetime(2026, 9, 2, 10, 10),
-    gate="B4",
-)
+```bash
+ramp-optimizer --help
+ramp-optimizer demo --scenario normal
+ramp-optimizer demo --scenario shortage
+ramp-optimizer demo --scenario emergency-lead
 ```
 
-Flight type, work windows, parsed numbers, and Express status are derived by
-pure functions rather than copied onto `Flight`:
+Module execution is equivalent:
 
-```python
-from ramp_optimizer import OptimizerConfig, derive_flight_operational_facts
-
-facts = derive_flight_operational_facts(turn, OptimizerConfig())
-
-assert facts.flight_type == "TURN"
-assert facts.work_start == datetime(2026, 9, 2, 8, 52)
-assert facts.work_end == datetime(2026, 9, 2, 10, 10)
-assert facts.arrival_numeric_flight_number == 1428
-assert facts.departure_numeric_flight_number == 1814
-assert facts.express is False
+```bash
+python -m ramp_optimizer demo --scenario normal
 ```
 
-The work-window formulas are:
+An optional positive, finite total solve budget may be supplied:
 
-- arrival-only: `[arrival - arrival_preparation, arrival + arrival_offload)`;
-- departure-only: `[departure - departure_work, departure)`;
-- turn: `[arrival - arrival_preparation, departure)`.
-
-The default timing values are 10 minutes of arrival preparation, 20 minutes
-of arrival offload, and 60 minutes of departure work. These half-open intervals
-mean that two windows touching at one endpoint do not overlap. Full `datetime`
-arithmetic handles midnight without guessing a date: a 00:30 departure on
-September 3 has a default window beginning at 23:30 on September 2. A turn
-crossing midnight must explicitly give its departure the following date.
-
-Numeric parsing accepts values such as `1428`, `UA123`, and `OO3550`, preserves
-the original display value on `Flight`, and rejects values without a terminal
-numeric portion. A movement is Express exactly when its parsed number is
-greater than `express_threshold` (3000 by default), so 3000 is Mainline while
-3001 is Express. Both directional numbers on a turn must resolve
-to the same category; mixed Mainline/Express turns are invalid.
-
-Arrival numbers are unique among arrivals, and departure numbers are unique
-among departures, using the parsed numeric value. Thus `123`, `UA123`, and
-`ua00123` are the same number for uniqueness. The same number may appear once
-in each direction. For example, one turn may depart as 1814 and a later turn
-may arrive as 1814. Gate is retained only for display; it does not affect
-classification, timing, staffing, eligibility, or optimization.
-
-This entire derivation layer is deterministic and solver-independent. It does
-not assign employees or impose assignment-conflict constraints.
-
-## Employee-flight eligibility
-
-Eligibility answers whether an employee may legally work a flight; it does not
-decide whether that employee should be assigned. The assessment derives the
-approved work window from the timing layer and then checks, in deterministic
-order, that the employee is enabled, has a shift, has an allowed normalized
-role, fits the complete flight window inside one individual shift, and has no
-overlapping fixed assignment.
-
-```python
-from ramp_optimizer import (
-    Employee,
-    EmployeeShift,
-    OperationalRole,
-    OptimizerConfig,
-    assess_employee_flight_eligibility,
-)
-
-employee = Employee("E001", "Avery Stone")
-shift = EmployeeShift(
-    "E001",
-    datetime(2026, 9, 2, 5),
-    datetime(2026, 9, 2, 13),
-    OperationalRole.RAMP_AGENT,
-)
-assessment = assess_employee_flight_eligibility(
-    employee,
-    (shift,),
-    departure_only,
-    OptimizerConfig(),
-)
-
-assert assessment.eligible
-assert assessment.reasons == ()
+```bash
+ramp-optimizer demo --scenario normal --time-limit 10
 ```
 
-`RAMP_AGENT` is the only role allowed by default. Trainee and possible-support
-eligibility default to their `OptimizerConfig` settings and may be overridden
-explicitly per call. Leads require the independent `include_leads=True` pass;
-the emergency-Lead configuration does not enable them automatically. Non-ramp
-and unknown roles remain excluded. Source position text is not consulted.
-`PUSH` and `CLOSE_OUT` qualifications also do not filter generic eligibility.
-They are separate crew-level requirements for departures and turns, while an
-unqualified employee remains a legal candidate whenever the ordinary
-eligibility checks pass.
+The CLI is a thin adapter: it builds a fictional input, calls the existing
+validation and optimizer functions, and sends the structured result to the
+existing reporting layer.
 
-Shift containment is inclusive at both availability boundaries: a flight may
-begin exactly at shift start or end exactly at shift end. Separate shifts are
-never merged to cover a work window that spans their gap.
+### Demo scenarios
 
-A `FixedAssignment` records a manual or locked employee-flight pairing without
-inventing a flight ID. A different fixed flight blocks a candidate only when
-their half-open work windows overlap. Thus `[08:00, 09:00)` conflicts with
-`[08:30, 09:30)` but not with `[09:00, 10:00)`. Fixed assignments are validated
-for employee and flight references, duplicates, overlaps, and underlying
-employee eligibility.
+| Scenario | Purpose | Expected readiness |
+|---|---|---|
+| `normal` | 24 mixed movements, overlapping windows, multiple shifts, qualifications, protected breaks, workload, and continuity | `READY` without emergency recovery |
+| `shortage` | A valid flight with too few eligible Agents | `MANUAL_INTERVENTION_REQUIRED` with a useful partial schedule |
+| `emergency-lead` | Agent-only minimum staffing is impossible, but one Lead can recover it | `READY_WITH_WARNINGS` with explicit Lead use |
 
-`build_candidate_assignments()` validates the complete day and configuration,
-then returns only eligible, non-fixed employee-flight pairs in stable employee
-order followed by flight order. This preprocessing makes illegal assignments
-unrepresentable to the solver. It does not construct a solver, choose
-assignments, enforce crew-level qualification coverage, or optimize staffing
-and fairness.
+### Exit codes
 
-## Staffing configuration
+| Code | Meaning |
+|---|---|
+| `0` | The command succeeded and produced a valid usable result, including a warned partial schedule. |
+| `1` | No usable optimization result was produced, an output could not be written, or an unexpected supported runtime failure occurred. |
+| `2` | Command usage or input arguments were invalid. |
 
-There is no global maximum-staff setting. Staffing requirements are derived
-from the input flight's `heavy` flag without modifying the flight:
+A staffing shortage is an operational outcome, not a software crash, so the
+documented `shortage` demo exits with code `0` and preserves its warnings.
 
-```python
-from datetime import datetime
+### Example report
 
-from ramp_optimizer import Flight, OptimizerConfig, staffing_requirements_for
-
-config = OptimizerConfig()
-normal = staffing_requirements_for(
-    Flight(
-        arrival_flight_number="UA123",
-        arrival_time=datetime(2026, 9, 2, 8),
-    ),
-    config,
-)
-heavy = staffing_requirements_for(
-    Flight(
-        departure_flight_number="UA456",
-        departure_time=datetime(2026, 9, 2, 9),
-        heavy=True,
-    ),
-    config,
-)
-
-assert normal.maximum == 4
-assert heavy.maximum == 5
-```
-
-## Staffing, qualification, break, and fairness optimizer
-
-`optimize_flight_assignments()` is the primary limited CP-SAT scheduling entry
-point. `optimize_minimum_staffing()` remains available as a backward-compatible
-alias. The optimizer creates `x[employee, flight]` Boolean variables only for
-eligible, non-fixed candidate pairs. Disabled, unavailable, role-ineligible,
-fixed-conflicting, and already-fixed pairs therefore have no decision variable.
-Fixed assignments are constants that always contribute to their flight's crew
-and qualification coverage.
-
-The hard constraints prevent one employee from working overlapping half-open
-flight windows and cap each flight at the maximum returned by
-`staffing_requirements_for()`. Fixed staffing above that maximum is rejected by
-validation before model construction. No transition time or gate-distance rule
-is applied. Consecutive assignments remain legal; streak length is a soft
-fairness preference, not a hard rest or transition rule.
-
-Departures and turns each require at least one push-qualified employee and at
-least one close-out-qualified employee. One dual-qualified employee may cover
-both requirements. Arrival-only flights require neither qualification and
-report both coverage fields as `None`. Coverage is derived only from the
-authoritative `Employee.qualifications` collection; names, source positions,
-normalized roles, flight numbers, and fixed status never grant qualifications.
-
-### Required breaks
-
-Each employee included by the active ordinary role policy should receive an
-uninterrupted, flight-free gap of at least
-`OptimizerConfig.required_break_minutes`, which defaults to 30 minutes.
-Only a gap between two consecutive final assignments counts. Time before the
-first assignment and after the last assignment never counts.
-
-For chronological half-open assignments `[work_start_A, work_end_A)` and
-`[work_start_B, work_end_B)`, the gap is `work_start_B - work_end_A`. A flight
-ending at 09:00 followed by one starting at 09:30 satisfies the default rule;
-09:29 or 09:00 does not. Full `datetime` arithmetic applies across midnight.
-
-The bounding assignments must fit within one individual eligible shift. Gaps
-between separate shifts are never combined. When an employee has assignments
-in multiple shifts, a qualifying gap within any one continuous shift satisfies
-the daily requirement. Fixed assignments are evaluated exactly like selected
-assignments, and an intervening fixed or selected flight splits the surrounding
-idle period into the actual consecutive gaps.
-
-Employee break results use these statuses:
-
-- `NOT_EVALUABLE_BETWEEN_ASSIGNMENTS`: the included ordinary employee has fewer
-  than two final assignments;
-- `SATISFIED`: at least one qualifying consecutive gap exists;
-- `UNSATISFIED`: at least two assignments exist but no qualifying gap does;
-- `NOT_APPLICABLE`: reserved for employees outside the ordinary-policy
-  population, for whom this optimizer does not create employee results.
-
-An unsatisfied break is recoverable and produces one critical employee-level
-`REQUIRED_BREAK_NOT_MET` warning. It never makes the operational day infeasible.
-Flight warnings remain first in stable flight order, followed by break warnings
-in stable employee order.
-
-### Objective hierarchy
-
-Minimum staffing, qualification coverage, and break coverage are recoverable
-rather than hard constraints, so a constrained day still returns its best
-partial schedule with critical warnings for every known shortage. The optimizer
-uses seventeen sequential integer objective stages:
-
-1. Maximize flights reaching minimum staffing.
-2. Maximize minimum-staffed departures and turns covering both qualifications.
-3. Maximize separate push and close-out coverage on minimum-staffed departures
-   and turns.
-4. Minimize total minimum-staffing shortfall.
-5. Minimize the largest individual minimum shortfall.
-6. Minimize known unsatisfied required breaks among included ordinary employees.
-7. Maximize flights reaching preferred staffing.
-8. Minimize total preferred-staffing shortfall.
-9. Maximize separate qualification coverage on below-minimum partial crews as
-   the final operational tie-breaker.
-10. Minimize the raw flight-count spread among fairness participants.
-11. Minimize the total pairwise absolute flight-count difference among those
-    participants.
-12. Minimize the maximum consecutive-flight streak across participants.
-13. Minimize the sum of participant longest streaks.
-14. Minimize total shift-adjusted proportional flight-count deviation.
-15. Minimize adjusted-workload spread.
-16. Minimize total pairwise adjusted-workload difference.
-17. Maximize retained employee transitions across plausible nearby flight pairs.
-
-The exact formulation uses one break stage rather than redundant achieved and
-unsatisfied stages. Minimizing known unsatisfied breaks improves employees with
-two or more assignments without rewarding extra flights merely to convert a
-non-evaluable employee into a satisfied one. Break optimization occurs after
-all minimum-staffing and high-priority qualification outcomes are fixed, but
-before preferred staffing.
-
-### Raw flight-count fairness
-
-Fairness is evaluated only after all nine staffing, qualification, break, and
-preferred-staffing outcomes are fixed. Its ordinary employee-result population
-contains each enabled employee with at least one shift whose normalized role is
-assignment-eligible under the active ordinary policy. `RAMP_AGENT` is always
-eligible, `TRAINEE` participates only when
-`allow_trainees_for_assignments=True`, and `POSSIBLE_RAMP_SUPPORT` participates
-only when `allow_possible_ramp_support_for_assignments=True`. The fairness
-participant subset contains ordinary employees who had at least one legal
-assignment opportunity before solving or at least one fixed assignment. A
-participant stays in that subset even when the final result assigns them zero
-flights.
-
-Disabled employees, Leads, non-ramp and unknown roles, employees without an
-ordinary-policy shift, and employees with neither an opportunity nor a fixed
-assignment are excluded from fairness. `allow_leads_for_minimum_staffing=True`
-does not add Leads to this ordinary pass; it is reserved for the optional
-emergency second pass. Population order follows the input employee order.
-
-The model counts each selected or fixed aircraft movement once. Arrival-only,
-departure-only, and turn movements therefore each add one; a turn's two flight
-numbers do not make it two assignments. For every participant, the exact count
-is the fixed-assignment count plus selected candidate variables. Exact maximum
-and minimum equalities define the raw count spread. Stage 10 minimizes that
-spread, then stage 11 minimizes the sum of absolute count differences over all
-unordered employee pairs, which resolves avoidable middle-of-the-distribution
-imbalance without floating-point solver expressions. Zero- and one-participant
-populations both have a zero spread and zero pairwise difference.
-
-Raw count spread and pairwise difference are not normalized for shift length or
-opportunity count. They remain higher priority than the shift-length refinement
-described below. Express flights, three-person crews, flight duration,
-direction, heavy status, and qualifications carry no fairness weight.
-
-### Consecutive-flight streak fairness
-
-Stages 12 and 13 prefer shorter runs only after both raw-count objectives are
-fixed. Within each individual employee shift, final fixed-plus-selected
-assignments are sorted by work start, work end, and stable flight index. Two
-adjacent selected assignments stay in one streak exactly when:
+The beginning of the normal fictional report is:
 
 ```text
-later work start - earlier work end < consecutive_reset_minutes
+Ramp Team Flight Optimizer
+Readiness: READY
+Solver: OPTIMAL; all objectives proven optimal: yes
+Emergency recovery: enabled=no; disposition=NOT_ENABLED; Lead assignments=0
+Flights: 24; minimum staffed 24/24; below minimum 0; preferred staffed 3
+Qualifications: compliant 15/15; missing push 0; missing close-out 0
+Breaks: satisfied 16; unsatisfied 0; not evaluable 0
+Assignments: 75; participating employees 16
+Lead interventions:
+- None
+Warnings:
+- None
 ```
 
-The default reset is 40 minutes. Thus a 39-minute gap continues a streak, while
-a gap of exactly 40 minutes or more begins a new one. A zero-minute touching
-gap is legal under half-open interval semantics and continues the streak. Full
-datetimes preserve the same behavior overnight.
+Exact runtimes and the chosen assignments depend on the configured solve budget
+and installed solver version; report sections and record ordering are stable.
 
-Streak length counts `Flight` assignments, not flight numbers or elapsed time.
-An arrival-only movement, departure-only movement, and turn each count once;
-the two directional numbers on a turn do not make it two assignments. Fixed
-assignments participate as selected constants, can connect to optional work,
-and are never removed. An unavoidable fixed or qualification-driven long
-streak remains feasible and is reported normally.
+## Flight model in brief
 
-Separate shifts always start separate streak calculations, even when their
-clock gap is shorter than the reset. Each assignment is associated with the
-single eligible shift that fully contains its work window, assignments are
-ordered inside that shift, and the employee result takes the longest run over
-all of their shifts. Existing validation rejects overlapping shifts that could
-make containment ambiguous.
+- An **arrival** has an arrival flight number and ETA but no departure side.
+- A **departure** has a departure flight number and ETD but no arrival side.
+- A **turn** contains both sides, with departure later than arrival.
+- ETA and ETD are scheduled times. With defaults, arrival-only work runs from
+  ETA − 10 minutes through ETA + 20 minutes, departure-only work runs from ETD −
+  60 minutes through ETD, and a turn runs from ETA − 10 minutes through ETD.
+- **Mainline** has a parsed numeric flight number at or below `3000`.
+- **Express** has a parsed numeric flight number greater than `3000`.
+- Both legs of a turn must be in the same service class; mixed turns are invalid.
+- A **heavy** movement raises preferred and maximum staffing from four to five;
+  the default minimum remains three.
 
-Required breaks and streak resets are intentionally independent. A default
-35-minute gap satisfies the 30-minute required-break rule but remains inside
-the default 40-minute streak. Changing `required_break_minutes` does not alter
-streak classification, and changing `consecutive_reset_minutes` does not alter
-break status.
+`Flight` is the immutable movement identity used by assignments: its arrival and
+departure numbers and times, gate, and heavy flag form the domain value. Parsed
+numeric values establish directional uniqueness, so carrier prefixes or leading
+zeroes do not create a second identity for the same directional flight number.
 
-The CP-SAT formulation is polynomial rather than subset-based or minute-indexed.
-For each participant and shift it builds stable possible-assignment order and
-prefix selected counts. A quadratic set of exact predecessor arcs is created
-only for pairs with a gap below the reset: both endpoints must be assigned and
-the prefix difference must show no selected assignment between them. Each
-selected assignment then has run length `1`, or its continuing predecessor's
-run plus `1`; an unselected assignment has run length `0`. Exact maximum
-equalities produce each participant's longest run and the schedule-wide
-maximum. Stage 12 minimizes that global maximum, and Stage 13 minimizes the sum
-of participant maxima without changing it. Public values are independently
-reconstructed from final assignments and asserted against the solver values.
+See [Domain rules](docs/DOMAIN_RULES.md) for the complete validated behavior.
 
-There is no streak warning, penalty weight, hard maximum, overlap buffer,
-transition-time constraint, or additional break requirement in this milestone.
-
-### Shift-length adjustment
-
-Stage 14 uses scheduled shift length only to choose among schedules whose first
-13 objective values are already tied. It never worsens raw-count or streak
-fairness. Thus two employees on eight-hour and four-hour shifts still receive
-`3–3` when six assignments can be divided equally. When three assignments
-require a `2–1` split, the longer-shift employee is preferred for the extra
-assignment when every higher priority, including streak behavior, is tied.
-
-Scheduled minutes come from full `EmployeeShift.end - EmployeeShift.start`
-differences. Separate allowed shifts are summed without merging them or counting
-the idle gap, and overnight shifts use their true cross-date duration. Ordinary
-`RAMP_AGENT` shifts count; a Lead, non-ramp, or unknown shift does not. Trainee
-and possible-support intervals count only when their existing ordinary-pass
-configuration is enabled. Core validation rejects duplicate or overlapping
-same-employee shifts and durations that are not an exact positive whole number
-of minutes, so schedule rows cannot inflate the total.
-
-For participant `e`, the conceptual reporting target is:
+## Architecture
 
 ```text
-total participant assignments × employee shift minutes
-────────────────────────────────────────────────────────
-             total participant shift minutes
+Input models
+    -> validation
+    -> timing / classification
+    -> eligibility
+    -> candidate generation
+    -> CP-SAT optimizer
+    -> structured result
+    -> operational reporting
+
+sample data / CLI / benchmark -> orchestrate the same public layers
 ```
 
-The target is a comparison, not a quota, and is never rounded for optimization.
-CP-SAT avoids division and floating-point coefficients by minimizing the sum of
-these exact integer absolute deviations:
+Models carry data, timing derives facts, eligibility answers business-rule
+questions, candidate generation reduces the solver decision space, the optimizer
+handles assignment tradeoffs, and reporting interprets without changing the
+result. The CLI owns no scheduling policy. See [Architecture](docs/ARCHITECTURE.md).
 
-```text
-abs(
-    flight_count[e] × total participant shift minutes
-    - total participant assignments × employee shift minutes[e]
-)
+## Optimization and readiness
+
+The ordinary solve optimizes 17 objectives sequentially. After each proven
+optimum, that value is fixed before the next stage is attempted, so a later
+fairness or continuity goal cannot damage an earlier staffing, qualification, or
+break result. See [Optimization objectives](docs/OPTIMIZATION_OBJECTIVES.md).
+
+Solver status answers whether CP-SAT found or proved a mathematical solution.
+Operational readiness answers whether the returned schedule is safe to use as-is.
+An `OPTIMAL` result can still be `MANUAL_INTERVENTION_REQUIRED` when the best
+possible solution is below minimum staffing or qualification requirements.
+Conversely, a timed result may remain usable while reporting that not all
+objectives were proven optimal.
+
+Partial schedules are preserved with warnings. Emergency Lead use is an explicit,
+audited recovery mechanism: Leads do not silently join normal Agent staffing, and
+an emergency attempt is adopted only under the implemented comparison policy.
+See [Operational readiness](docs/OPERATIONAL_READINESS.md).
+
+## Tests
+
+Install development dependencies and run:
+
+```bash
+python -m pytest
 ```
 
-The total participant assignment count is linked exactly to the existing raw
-count variables. Fixed assignments contribute once to both that total and the
-individual count, and may influence which interchangeable optional work goes to
-a longer shift; they are never removed or discounted. Zero participants, one
-participant, and zero participant assignments all produce zero scaled
-deviation.
+The suite covers validation, timezone and interval boundaries, eligibility,
+fixed assignments, staffing and qualifications, breaks, fairness, streaks,
+adjusted workload, continuity, emergency recovery, timeouts, reporting, the full
+synthetic day, public scenarios, CLI behavior, benchmark schema, and package
+boundaries. Tests do not use absolute elapsed-time pass/fail thresholds.
 
-Idle time remains cost-free, utilization is not maximized, and stage 14 cannot
-create staffing beyond the already-fixed preferred outcome or make an otherwise
-illegal assignment. There are no shift-imbalance warnings. Shift length is not
-an opportunity normalization: candidate count, flight density, qualifications,
-and nonoverlapping assignment combinations do not change the target.
+## Benchmarks
 
-### Adjusted-workload fairness
+Run all deterministic sizes three times:
 
-Stages 15 and 16 are a secondary refinement after raw flight-count, streak, and
-shift-length fairness have all been fixed. Stage 15 minimizes the spread
-between the highest and lowest adjusted workload. Stage 16 then minimizes total
-pairwise adjusted-workload difference, resolving avoidable imbalance in the
-middle of a population without changing any earlier optimum. Adjusted workload
-therefore cannot exchange a `3–3` raw assignment distribution for `4–2`, and it
-cannot worsen the Stage 14 proportional shift-length result.
-
-The default synthetic workload assumptions are:
-
-- Mainline assignment: `1.00`;
-- Express assignment: `0.80`;
-- Mainline assignment on a final crew of exactly three: `1.15`;
-- Express assignment on a final crew of exactly three: `0.92` (`0.80 × 1.15`).
-
-The three-person multiplier means exactly `staffing_count == 3`; it is not tied
-to configurable minimum staffing. Counts of two, four, or five do not activate
-it. The same rule applies to normal and heavy flights, and fixed employees count
-toward final staffing. Heavy status has no independent workload multiplier.
-Flight duration, direction, gate, qualifications, aircraft information, and tow
-notes also add no workload weight in this milestone. Service category comes
-from the already-derived operational facts rather than being reparsed by the
-optimizer.
-
-CP-SAT receives integers only. With the default `workload_scale=100`, the model
-retains the product of two factors at a unit scale of `100 × 100`, producing
-exact values of `10,000`, `8,000`, `11,500`, and `9,200` units for the four
-combinations above. Configuration validation rejects factors that are not
-exactly representable at the selected scale or bounds outside CP-SAT's integer
-range instead of silently rounding. Public reporting divides only at the result
-boundary. Fixed assignments contribute their full category and exact-crew
-workload and remain immutable.
-
-These factors are configurable, explainable portfolio assumptions. They are not
-empirical safety measurements or proprietary airline standards.
-
-### Emergent team continuity
-
-Stage 17 is the final and lowest-priority objective. It does not define Team A,
-Team B, employee affinity, or any permanent grouping. A temporary team exists
-only as the assigned employee set on one flight, and employees remain free to
-split whenever any stage 1–16 outcome would otherwise worsen.
-
-The optimizer considers every stable chronological flight pair whose work
-windows do not overlap and whose second window begins at or after the first
-window ends with a gap no greater than
-`OptimizerConfig.continuity_horizon_minutes` (120 minutes by default). A gap
-exactly equal to the horizon is eligible; a larger gap and overlapping flights
-are not. All qualifying pairs are retained rather than applying an arbitrary
-next-flight cutoff. For the expected 15–25-flight input, this has an absolute
-pre-filter bound of 105–300 flight pairs and is usually much smaller after the
-horizon filter.
-
-For each eligible flight pair and employee who can appear on both endpoints,
-the model creates one exact Boolean conjunction:
-
-```text
-retained[e, earlier, later]
-    = assigned[e, earlier] AND assigned[e, later]
+```bash
+python -m ramp_optimizer benchmark --repeat 3
 ```
 
-The indicator is constrained below both fixed-or-selected assignment-presence
-expressions and above their sum minus one. Fixed assignments therefore
-participate naturally, and the indicator cannot be set to zero when both
-endpoints are assigned. Stage 17 maximizes the unweighted integer sum of these
-indicators. Every retained employee contributes one unit, so partial retention
-receives partial credit and team-size differences need no ratio. Flight type,
-Mainline/Express category, and heavy status do not change the continuity rule.
+Run one size or explicitly save versioned JSON:
 
-Because stages 1–16 have already been solved and fixed, continuity cannot alter
-minimum or preferred staffing, qualifications, breaks, raw-count fairness,
-streaks, shift-length adjustment, or adjusted workload. Existing staffing caps
-also prevent extra assignments: normal flights remain capped at four and heavy
-flights at five under default configuration. Idle time receives no penalty or
-reward.
-
-`OptimizationResult.continuity_metrics` reports every eligible previous/next
-flight pair, retained employee IDs in stable employee order, and its retention
-count. It also reports the eligible-pair count, total retained employee
-transitions, average retained employees per eligible pair, strongest retention
-count, and the first strongest transition in deterministic pair order. The
-average denominator is therefore explicit; no continuity percentage is
-invented. These values are independently rebuilt from final crew-set
-intersections and asserted against the CP-SAT indicators and stage total.
-
-The exact continuity regression uses eight flights and four employees. Its
-120-minute horizon produces 18 eligible pairs and 72 retained Boolean
-variables. The smaller case reliably proves all 17 lexicographic stages across
-the supported OR-Tools minor range; larger days are treated as bounded
-performance scenarios whose assertions distinguish a usable `FEASIBLE` result
-from proven `OPTIMAL` completion.
-
-### Emergency Lead recovery
-
-`OptimizerConfig.allow_leads_for_minimum_staffing` remains `False` by default.
-Every optimization first builds and solves the unchanged 17-stage Ramp-Agent
-model. The solved crews are then inspected independently. A critical shortage
-is either a flight below its three-person minimum, or a minimum-staffed
-departure/turn missing push and/or close-out coverage. Preferred-staffing
-shortfalls are deliberately noncritical. If no critical shortage exists, the
-first result returns immediately even when emergency Lead use is enabled.
-
-When critical shortages remain and the option is enabled, the optimizer builds
-a fresh model through the same parameterized builder. Ordinary candidates are
-unchanged. Enabled Leads are admitted only for Pass-1-critical flights, must
-have a Lead shift containing the complete work window, and must obey the same
-overlap, staffing-cap, qualification, and between-assignment break rules. A
-qualification-only candidate must carry a qualification that was missing in
-Pass 1.
-
-Every selected Lead assignment also has a hard, measurable-value constraint.
-It must either be necessary to keep its final crew at the operational minimum,
-or be the sole push or close-out provider on a minimum-staffed departure/turn.
-This prevents Lead use for preferred staffing, fairness, streaks, workload, or
-continuity even before objective tie-breaking. The emergency model inserts one
-new lexicographic stage after the six critical-operations/break stages:
-
-```text
-1-6   existing minimum, qualification, shortage, and break stages
-7     minimize total emergency Lead assignments
-8-18  existing preferred staffing, Ramp-Agent fairness, streak,
-      shift/workload, and Ramp-Agent continuity stages
+```bash
+ramp-optimizer benchmark --scenario full-day --repeat 3
+ramp-optimizer benchmark --repeat 3 --output benchmark-results.json
 ```
 
-Thus the ordinary solve retains its original 17 stage names and numbers. In
-Pass 2, critical coverage and breaks are fixed before Lead use is minimized;
-preferred staffing and all fairness refinements come afterward. Lead counts do
-not enter Ramp-Agent fairness, streak, shift-adjusted workload, or continuity
-objectives. Necessary Leads still receive normal legality and break reporting,
-while unused Leads in an attempted emergency pass have a `NOT_APPLICABLE`
-break result.
+Without `--output`, the command prints JSON and creates no file. The checked-in
+[benchmark methodology and baseline](benchmarks/README.md) records real optimizer
+runs and is documentation—not a machine-independent performance gate.
 
-`OptimizationResult.attempts` records each attempted pass, status, runtime,
-critical-shortage count, operational coverage counts, Lead assignment count,
-and Lead candidate-variable count. `emergency_staffing_status` distinguishes
-`NORMAL_SCHEDULE`, `LEAD_ASSISTED_SCHEDULE`, and
-`CRITICAL_SHORTAGE_REMAINS`. Each `lead_assignments` item states the flight,
-Lead, and independently reconstructed minimum/push/close reason. Structured
-informational warnings expose successful Lead interventions; if an attempted
-fallback remains insufficient, a structured manual-intervention warning
-identifies each affected flight.
+## Limitations and non-goals
 
-### Operational readiness and reporting
+- Inputs are trusted structured models or a constrained workbook import, not live
+  operational feeds.
+- Synthetic workload multipliers are explainable defaults, not empirically
+  calibrated labor standards.
+- The engine proposes assignments; a qualified supervisor remains responsible
+  for operational review and intervention.
+- Runtime varies with hardware, dependency versions, scenario complexity, and
+  solve budget.
+- Phase 1 is a library and CLI. It has no FastAPI, Flask, React, database,
+  authentication, deployment, Docker requirement, OCR, telemetry, or network calls.
 
-Milestones 1–14 are implemented. `OptimizationStatus` continues to describe
-the computation (`OPTIMAL`, `FEASIBLE`, `INFEASIBLE`, or `UNKNOWN`), while the
-separate `OperationalReadinessStatus` describes the recommendation:
+## Phase 2 direction
 
-- `READY`: a usable schedule has no unresolved staffing, qualification, or
-  break requirement and no reporting warning;
-- `READY_WITH_WARNINGS`: operations are covered, but information such as
-  emergency Lead use or incomplete optimality needs acknowledgment;
-- `MANUAL_INTERVENTION_REQUIRED`: a usable partial recommendation has an
-  unresolved minimum, qualification, or required-break issue;
-- `NO_USABLE_SCHEDULE`: no complete recommendation was returned.
-
-An `OPTIMAL` partial schedule may therefore still require manual intervention.
-The emergency-pass disposition separately records disabled, enabled-but-not-
-needed, adopted, adopted-with-shortages, unusable, worse, and no-improvement
-outcomes. This state is explicit rather than inferred from attempt count.
-
-Pass 2 is never adopted merely because it contains flight rows. Both pass
-results are independently reconstructed into this lexicographic critical
-score: minimum-staffed flights, minimum-staffed qualification-compliant
-flights, individual qualification coverage on those flights, total minimum
-shortfall, largest shortfall, and known unsatisfied breaks. A Pass-2 result
-must be usable and no worse under that exact ordering. It is selected only when
-it improves the critical score, or preserves it while supplying a valid Lead
-intervention or a proven later-stage improvement. `UNKNOWN`, `INFEASIBLE`,
-empty, structurally incomplete, incomparable, and worse emergency results fall
-back to Pass 1. Both attempts remain reported, and discarded Lead assignments
-never appear in the final result.
-
-Every attempt summary includes its pass number and stable label, Lead policy,
-solver status, usable/selected flags, coverage and shortage counts, unsatisfied
-break count, Lead candidates and assignments, completed objective records,
-optimality completion, and runtime. The final immutable `ScheduleSummary`
-derives its flight, qualification, break, participation, assignment, Lead,
-warning, and optimality counts from public final records. Arrival-only flights
-are excluded from qualification denominators; non-evaluable breaks are counted
-separately.
-
-Warnings remain machine-identifiable. Flight shortages appear first in input
-flight order (minimum, push, close-out), followed by employee breaks in input
-employee order, emergency Lead information in assignment order, emergency
-disposition warnings, per-flight manual escalations, and solver-optimality
-warnings. Identical structured subjects are deduplicated by warning code,
-employee ID, arrival flight number, and departure flight number without
-collapsing distinct flights, employees, push/close causes, or Lead
-interventions. Break failures make readiness manual but do not receive a
-redundant second warning.
-
-`format_optimization_report(result)` is a pure deterministic plain-text
-renderer. It includes readiness, computational status, emergency disposition,
-coverage, qualifications, breaks, Lead interventions, warnings, core fairness
-and continuity metrics, overall runtime, and per-pass audit lines. It performs
-no printing or file I/O and handles ordinary, partial, emergency, empty-day,
-and no-schedule results.
-
-Each solver pass retains its own configured time budget. Overall runtime is the
-wall-clock duration across model construction, every attempted pass, and pass
-selection; small result-finalization overhead and later formatter calls are not
-timed. It is never mislabeled as the chosen pass runtime, and is normally at
-least the sum of recorded pass runtimes. The per-attempt runtimes remain
-independently visible.
-
-Each proven optimum is fixed before solving the next stage. Sequential solves
-preserve true priority without arbitrary giant weights, and all stages share
-one total time budget. Qualification stages therefore cannot reduce the maximum
-achievable number of minimum-staffed flights, and qualified fragments cannot
-outrank operationally viable crews. For two simultaneous flights and five
-available employees, the result remains `3 + 2`: one flight reaches the
-three-person minimum, then the remaining two employees reduce total shortage
-on the other flight. Such a partial schedule can still be mathematically
-`OPTIMAL`. If a later objective times out or returns `UNKNOWN`, the last known
-feasible schedule is retained and returned with non-optimal objective metadata.
-This applies at the streak, workload, and continuity stages: all previously
-proven objective values remain fixed, and public metrics are reconstructed from
-whichever retained schedule is returned.
-
-```python
-from ramp_optimizer import optimize_flight_assignments
-
-result = optimize_flight_assignments(day, OptimizerConfig())
-```
-
-Results include stable assigned and fixed employee IDs, staffing limits and
-shortfalls, flight timing and classification, qualification coverage, objective
-values with proof status, warnings for known staffing, qualification, and break
-shortages, and runtime. Qualification warnings use the structured
-`PUSH_QUALIFICATION_NOT_MET` and `CLOSE_QUALIFICATION_NOT_MET` codes and coexist
-with minimum-staffing and employee break warnings.
-
-`OptimizationResult.employee_results` contains enabled employees admitted by
-the active ordinary role policy in stable employee order. Each result reports
-chronologically ordered assignments, raw total, Mainline, Express, and
-three-person-flight counts, plus break status.
-The raw total is the count used by Milestone 7 fairness for employees in its
-population; Mainline, Express, and three-person counts remain descriptive.
-Each ordinary employee result also reports scheduled shift minutes. Fairness
-participants receive their proportional target flight count and human-readable
-absolute actual-versus-target deviation; ordinary employee results outside the
-fairness population use `None` for target and deviation.
-`adjusted_workload` reports the reconstructed final fixed-point workload for
-every included ordinary employee, including factual zero workload for employees
-outside the active fairness subset. `longest_consecutive_streak` is the
-reconstructed integer maximum across that employee's separate shifts: `0` for
-no assignments, `1` for one assignment, and the actual longest run thereafter.
-Leads and unrelated roles are excluded from ordinary Pass-1 employee results.
-When Pass 2 is required, enabled Leads are included in employee reporting but
-remain excluded from the Ramp-Agent fairness population.
-
-`OptimizationResult.fairness_metrics` reports the fairness population size,
-total and average assignment counts, highest and lowest counts, and their
-spread. It also reports total participating shift minutes, the sum of public
-actual-versus-target deviations, and adjusted-workload spread. These values are
-reconstructed from final assignments and authoritative shifts; the shift and
-workload objective values remain exact integers. Its
-`maximum_consecutive_streak` is the reconstructed maximum across the fairness
-population and is `0` when there are no participants.
-
-`OptimizationResult.continuity_metrics` is populated for every solved result,
-including a factual zero/empty value when no flight pair is horizon-eligible.
-Its transition records reference the original immutable `Flight` values and
-list exactly which employees appear in both final crews.
-
-This optimizer is not production-certified or a substitute for legal, safety,
-or local operational review. Milestone 15 final benchmark definition,
-documentation audit, packaging/API-surface cleanup, code-quality polish, and
-release-readiness review remain. No production UI or API is included.
-
-## TeamWork schedule import
-
-```python
-from ramp_optimizer import import_teamwork_schedule
-
-result = import_teamwork_schedule("synthetic-schedule.xlsx", roster=(employee,))
-```
-
-The importer finds the `Schedule` worksheet and discovers its header row by
-normalized column names. It requires `Date`, `Position`, `Employee`, `Start`, and
-`End`; other known TeamWork columns are optional.
-
-Important import rules:
-
-- overnight shifts are represented with next-day end datetimes;
-- the calculated start/end duration is authoritative, not `Hours`;
-- `Hours` differences greater than 0.10 hours produce a warning;
-- zero-length shifts and shifts longer than 18 hours are rejected by default;
-- blank employees and configured vacancy placeholders become distinct vacancy
-  records, never fictional employees;
-- unmatched and ambiguous roster names produce privacy-conscious warnings;
-- note contents are discarded and represented only by import provenance's
-  `notes_present` flag;
-- blank `Break` values do not imply a break was taken;
-- unknown roles remain ineligible and produce a warning.
-
-Position mapping is explicit configuration. Defaults classify ordinary Ramp
-Agents and Leads, trainees, Ramp Instructors, customer service, and cabin
-cleaning. `Bagroom`, `Airline-Specific Ramp`, and `Operations` deliberately map
-to `UNKNOWN` pending business confirmation.
-
-## Development
-
-```powershell
-py -3.12 -m venv .venv
-.\.venv\Scripts\python.exe -m pip install -e ".[dev]"
-.\.venv\Scripts\python.exe -m pytest
-```
-
-Python 3.12 is the tested development runtime. The package metadata permits
-Python 3.12 and newer, but newer interpreters are not implicitly claimed as a
-release qualification. OR-Tools `>=9.12,<10` is supported: compatibility is
-kept at the public API/semantic-result level instead of depending on incidental
-search timing from one minor release. Focused checks run on both 9.12 and 9.15;
-version-specific annotations are postponed so 9.12 remains importable.
-
-The default command runs every test, including integration and slow tests. For
-faster local feedback:
-
-```powershell
-.\.venv\Scripts\python.exe -m pytest -m "not slow and not integration"
-```
-
-To run only the end-to-end/performance category:
-
-```powershell
-.\.venv\Scripts\python.exe -m pytest -m "integration or slow"
-```
-
-### Milestone 14 synthetic verification
-
-The canonical scenario is a hand-designed, entirely fictional day with 24
-movements, 16 enabled ordinary Ramp Agents, two Leads, a disabled Ramp Agent,
-and excluded trainee/non-ramp roles. It includes 4-, 6-, 8-, and 10-hour
-shifts, a split shift, overnight shifts, overlapping banks, quiet periods,
-arrival-only, departure-only, turn, Mainline, Express, normal, heavy, qualified,
-unqualified, and fixed-assignment cases. Two variations add a recoverable
-overnight shortage and a partially recoverable pair of competing shortages.
-No names, IDs, flight records, or station facts represent a real operation.
-
-The verification suite separates three concerns:
-
-- exact correctness cases are intentionally small enough to prove every
-  lexicographic optimum;
-- bounded full-day/performance cases require a usable, hard-constraint-safe,
-  internally consistent result and verify optimality metadata honestly;
-- timeout-degradation cases use tiny budgets or controlled solver outcomes to
-  prove retention of the last feasible schedule and accurate warnings.
-
-Test-only invariant checks independently reconstruct assignment integrity,
-role/shift eligibility, overlap legality, staffing, qualifications, breaks,
-streaks, fixed-point workload, fairness populations and aggregates, continuity,
-readiness, summaries, warning identities, attempts, Lead interventions, and
-formatted reporting from public inputs and results. Metamorphic tests cover
-input reordering, irrelevant/disabled employees and Leads, time budgets,
-Express thresholds, independent break/streak thresholds, continuity horizons,
-heavy flags, and added qualifications. Boundary matrices cover date rollover,
-half-open intervals, shift endpoints, flight numbers, configuration types and
-ranges, staffing limits, qualifications, 29/30/39/40/41-minute gaps, and
-continuity horizon edges.
-
-On one Windows Python 3.12 development environment the complete suite is on the
-order of one to two minutes and the fast subset is materially shorter. Runtime
-varies with CPU load, OR-Tools minor version, and filesystem behavior, so tests
-do not assert exact wall-clock values. Pytest's temporary directory must be
-writable; `--basetemp` can point to a local scratch directory on locked-down
-Windows profiles.
-
-These tests are synthetic verification, not operational certification. They do
-not model gate travel, live disruptions, legal rule interpretation, or
-production-scale station data. Solver scale and late-stage proof time remain
-bounded by the configured per-pass budget.
+A future Phase 2 may place a carefully designed API and non-technical UI around
+the stable structured models, add persistence and authenticated workflows, and
+connect approved data sources. Those additions should preserve the engine’s pure
+layering, explicit warnings, deterministic sample mode, and solver/readiness
+distinction rather than moving business rules into integration code.

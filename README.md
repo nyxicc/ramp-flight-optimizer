@@ -11,14 +11,10 @@ lexicographic objective hierarchy rather than one blended score.
 
 ## Project status
 
-Phase 1—the standalone optimization engine—is complete. It includes validated
-domain models, timing and eligibility rules, assignment optimization, structured
-results and warnings, human-readable reporting, fictional demos, reproducible
-benchmarks, packaging, and automated tests.
-
-The repository intentionally does not include a web UI, API server, database,
-authentication, deployment, OCR, schedule-image parsing, or live airline data.
-Those integration concerns belong to a possible Phase 2.
+Phase 1—the standalone optimization engine—is complete. Phase 2 Milestone 16 adds
+a versioned FastAPI adapter around that engine. The repository still has no web
+UI, database, background jobs, authentication, deployment, OCR, schedule-image
+parsing, or live airline data.
 
 ## Capabilities
 
@@ -60,6 +56,12 @@ the equivalent `python -m ramp_optimizer` module command. Runtime dependencies a
 bounded in `pyproject.toml`; CLI, JSON, timing, platform, and statistics support
 use the Python standard library.
 
+To develop or test the API, install both optional groups:
+
+```bash
+python -m pip install -e ".[api,dev]"
+```
+
 ## Quick start
 
 ```bash
@@ -84,6 +86,20 @@ ramp-optimizer demo --scenario normal --time-limit 10
 The CLI is a thin adapter: it builds a fictional input, calls the existing
 validation and optimizer functions, and sends the structured result to the
 existing reporting layer.
+
+## API
+
+Run the development API on localhost:
+
+```bash
+python -m uvicorn ramp_optimizer_api.app:app --reload --host 127.0.0.1
+```
+
+The `/api/v1` contract provides health and version information, domain validation,
+and synchronous optimization. Staffing shortages and valid partial schedules are
+returned as structured HTTP `200` results; invalid optimizer input uses a stable
+HTTP `422` error envelope. See the [API contract](docs/API.md) for request and
+response examples, fixed-flight references, serialization rules, and limitations.
 
 ### Demo scenarios
 
@@ -153,7 +169,10 @@ See [Domain rules](docs/DOMAIN_RULES.md) for the complete validated behavior.
 ## Architecture
 
 ```text
-Input models
+Client
+    -> versioned FastAPI adapter
+    -> API/domain mapping
+    -> Input models
     -> validation
     -> timing / classification
     -> eligibility
@@ -162,7 +181,7 @@ Input models
     -> structured result
     -> operational reporting
 
-sample data / CLI / benchmark -> orchestrate the same public layers
+sample data / CLI / benchmark -> orchestrate the same Phase 1 public layers
 ```
 
 Models carry data, timing derives facts, eligibility answers business-rule
@@ -224,20 +243,21 @@ runs and is documentation—not a machine-independent performance gate.
 
 ## Limitations and non-goals
 
-- Inputs are trusted structured models or a constrained workbook import, not live
-  operational feeds.
+- API inputs are structured JSON; workbook input remains a separate constrained
+  Phase 1 adapter rather than a live operational feed.
 - Synthetic workload multipliers are explainable defaults, not empirically
   calibrated labor standards.
 - The engine proposes assignments; a qualified supervisor remains responsible
   for operational review and intervention.
 - Runtime varies with hardware, dependency versions, scenario complexity, and
   solve budget.
-- Phase 1 is a library and CLI. It has no FastAPI, Flask, React, database,
-  authentication, deployment, Docker requirement, OCR, telemetry, or network calls.
+- The API runs optimization synchronously and has no persistence, jobs, polling,
+  cancellation workflow, authentication, React UI, deployment layer, OCR,
+  telemetry, or live-data network calls.
 
 ## Phase 2 direction
 
-A future Phase 2 may place a carefully designed API and non-technical UI around
+Later Phase 2 milestones may place a non-technical UI and job execution around
 the stable structured models, add persistence and authenticated workflows, and
 connect approved data sources. Those additions should preserve the engine’s pure
 layering, explicit warnings, deterministic sample mode, and solver/readiness

@@ -17,11 +17,12 @@ jobs:
           python-version: "3.12"
 
       - name: Install package and test dependencies
-        run: python -m pip install -e ".[dev]"
+        run: python -m pip install -e ".[api,dev]"
 
       - name: Verify import and command-line entry points
         run: |
           python -c "import ramp_optimizer"
+          python -c "from ramp_optimizer_api.app import app"
           python -m ramp_optimizer --help
           ramp-optimizer --help
 

@@ -6,6 +6,18 @@ solver-independent inputs and results.
 
 ## Dependency flow
 
+The HTTP boundary is an adapter around the completed engine:
+
+```text
+Client
+    -> versioned FastAPI adapter
+    -> Phase 1 application mapping
+    -> existing optimizer engine
+    -> structured API response
+```
+
+The core execution path remains:
+
 ```text
 OperationalDay + OptimizerConfig
             |
@@ -32,10 +44,12 @@ OperationalDay + OptimizerConfig
 
 sample_data ----> validation / optimizer / reporting <---- CLI
 benchmarking ---> validation / candidates / optimizer
+ramp_optimizer_api ---> public Phase 1 models / validation / optimizer
 ```
 
 Dependencies point toward the domain and solver, not back toward presentation.
-Production package modules never import from `tests`.
+`ramp_optimizer` never imports FastAPI or `ramp_optimizer_api`, and production
+package modules never import from `tests`.
 
 ## Module responsibilities
 
@@ -58,6 +72,10 @@ Production package modules never import from `tests`.
 | `benchmarking.py` | Deterministic benchmark sizes, actual optimizer timing, environment metadata, and versioned JSON. |
 | `cli.py` | Standard-library argument parsing and orchestration. It contains no scheduling policy or report formatting. |
 | `__main__.py` | Process boundary for `python -m ramp_optimizer`; this is where the returned exit code becomes a process exit. |
+| `ramp_optimizer_api/schemas.py` | Closed Pydantic version 1 request, response, and error schemas. |
+| `ramp_optimizer_api/mapping.py` | Pure conversion between API schemas and public Phase 1 records, including fixed-flight reference resolution. |
+| `ramp_optimizer_api/errors.py` | API policy and reference-resolution exceptions outside the optimizer domain. |
+| `ramp_optimizer_api/app.py` | FastAPI factory, versioned synchronous routes, and sanitized HTTP exception handling. |
 
 ## Run sequence
 
@@ -92,7 +110,7 @@ the caller supplies a destination.
 
 ## Extension boundary
 
-A future API or UI should depend on the public models and functions. It should not
-duplicate timing, eligibility, readiness, or reporting policy. That keeps one
-authoritative scheduling engine and lets the library and CLI remain executable
-without infrastructure.
+The API depends on public models and functions and does not duplicate timing,
+eligibility, readiness, classification, or reporting policy. Future persistence,
+job execution, and UI clients can depend on the versioned HTTP contract. The
+library and CLI remain executable without importing API infrastructure.

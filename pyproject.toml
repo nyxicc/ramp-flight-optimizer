@@ -14,7 +14,13 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+api = [
+    "fastapi>=0.141,<0.142",
+    "pydantic>=2.9,<3",
+    "uvicorn>=0.52,<0.53",
+]
 dev = [
+    "httpx>=0.28,<0.29",
     "pytest>=8,<9",
 ]
 

@@ -29,6 +29,7 @@ def test_release_documentation_exists_and_public_commands_are_real() -> None:
         "docs/DOMAIN_RULES.md",
         "docs/OPTIMIZATION_OBJECTIVES.md",
         "docs/OPERATIONAL_READINESS.md",
+        "docs/API.md",
         "benchmarks/README.md",
     )
 
@@ -37,4 +38,6 @@ def test_release_documentation_exists_and_public_commands_are_real() -> None:
     assert "python -m pytest" in readme
     assert ".venv\\Scripts\\Activate.ps1" in readme
     assert "source .venv/bin/activate" in readme
+    assert "python -m pip install -e \".[api,dev]\"" in readme
+    assert "ramp_optimizer_api.app:app" in readme
     assert all((REPOSITORY_ROOT / path).is_file() for path in required_documents)

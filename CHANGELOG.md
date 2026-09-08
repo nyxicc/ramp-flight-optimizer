@@ -3,6 +3,31 @@
 This project follows a concise, release-oriented changelog. No formal tagged
 release has been created.
 
+## Unreleased — Phase 2 Milestone 16
+
+### Added
+
+- A `/api/v1` FastAPI application factory and Uvicorn application exposing health,
+  package version, operational-day validation, and synchronous optimization.
+- Explicit Pydantic request, result, warning, metric, attempt, objective, Lead
+  intervention, validation, and error-envelope schemas.
+- Pure API-to-domain mapping with canonical directional fixed-flight references,
+  deterministic JSON serialization, and complete `OptimizationResult` coverage.
+- API application, mapping, validation, optimization, equivalence, OpenAPI, and
+  sanitized-error regression tests plus detailed API documentation.
+
+### Changed
+
+- Added bounded optional FastAPI/Uvicorn dependencies and a compatible HTTPX test
+  dependency; CI now installs API and development extras and imports the app.
+- Extended the architecture documentation with the versioned API adapter while
+  preserving the standalone Phase 1 library and CLI boundary.
+
+### Scope
+
+- Optimization remains synchronous and in-memory. No persistence, background jobs,
+  frontend, authentication, deployment, OCR, or live-data integration was added.
+
 ## Unreleased — Phase 1 portfolio release
 
 ### Added

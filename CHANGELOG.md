@@ -27,6 +27,12 @@ release has been created.
 
 ### Fixed
 
+- Replaced the nearly predetermined demo and benchmark construction with
+  decision-heavy scenarios: the normal demo now has two fixed assignments and 141
+  free candidates, while the benchmark sizes have increasing `14`, `70`, and
+  `103`-candidate search spaces with one, one, and two fixed assignments.
+- Corrected virtual-environment setup instructions so installation runs only after
+  the environment is activated on Windows PowerShell or macOS/Linux.
 - Aligned service-class derivation, aggregate validation, invariant checking, and
   documentation on the strict boundary: flight `3000` is Mainline and flight
   `3001` is Express.

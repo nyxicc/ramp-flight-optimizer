@@ -35,4 +35,6 @@ def test_release_documentation_exists_and_public_commands_are_real() -> None:
     assert "ramp-optimizer demo --scenario normal" in readme
     assert "python -m ramp_optimizer benchmark --repeat 3" in readme
     assert "python -m pytest" in readme
+    assert ".venv\\Scripts\\Activate.ps1" in readme
+    assert "source .venv/bin/activate" in readme
     assert all((REPOSITORY_ROOT / path).is_file() for path in required_documents)

@@ -7,16 +7,16 @@
     "release": "11",
     "system": "Windows"
   },
-  "generated_at_utc": "2026-09-08T16:24:52.421416Z",
+  "generated_at_utc": "2026-09-08T17:39:08.551602Z",
   "scenarios": [
     {
-      "candidate_assignment_count": 3,
+      "candidate_assignment_count": 14,
       "description": "First three movements and their fictional morning team.",
       "employee_count": 9,
-      "fixed_assignment_count": 9,
+      "fixed_assignment_count": 1,
       "flight_count": 3,
-      "median_solver_runtime_seconds": 0.04699999999957072,
-      "median_wall_clock_seconds": 0.042564600000332575,
+      "median_solver_runtime_seconds": 0.2660000000000764,
+      "median_wall_clock_seconds": 0.2680187000000842,
       "name": "small",
       "repeat_count": 3,
       "runs": [
@@ -27,9 +27,9 @@
           "operational_readiness": "MANUAL_INTERVENTION_REQUIRED",
           "optimization_attempt_count": 1,
           "repetition": 1,
-          "solver_runtime_seconds": 0.04699999999957072,
+          "solver_runtime_seconds": 0.2820000000001528,
           "status": "OPTIMAL",
-          "wall_clock_seconds": 0.047022899999319634
+          "wall_clock_seconds": 0.2723740999999791
         },
         {
           "all_objectives_proven_optimal": true,
@@ -38,9 +38,9 @@
           "operational_readiness": "MANUAL_INTERVENTION_REQUIRED",
           "optimization_attempt_count": 1,
           "repetition": 2,
-          "solver_runtime_seconds": 0.03099999999994907,
+          "solver_runtime_seconds": 0.26499999999987267,
           "status": "OPTIMAL",
-          "wall_clock_seconds": 0.04215290000047389
+          "wall_clock_seconds": 0.26621129999966797
         },
         {
           "all_objectives_proven_optimal": true,
@@ -49,21 +49,21 @@
           "operational_readiness": "MANUAL_INTERVENTION_REQUIRED",
           "optimization_attempt_count": 1,
           "repetition": 3,
-          "solver_runtime_seconds": 0.04700000000048021,
+          "solver_runtime_seconds": 0.2660000000000764,
           "status": "OPTIMAL",
-          "wall_clock_seconds": 0.042564600000332575
+          "wall_clock_seconds": 0.2680187000000842
         }
       ],
-      "solver_time_limit_seconds": 5.0
+      "solver_time_limit_seconds": 30.0
     },
     {
-      "candidate_assignment_count": 4,
+      "candidate_assignment_count": 70,
       "description": "First twelve movements and the fictional daytime team.",
       "employee_count": 11,
-      "fixed_assignment_count": 36,
+      "fixed_assignment_count": 1,
       "flight_count": 12,
-      "median_solver_runtime_seconds": 0.11000000000058208,
-      "median_wall_clock_seconds": 0.11333469999954104,
+      "median_solver_runtime_seconds": 6.141000000000076,
+      "median_wall_clock_seconds": 6.1446350000001075,
       "name": "medium",
       "repeat_count": 3,
       "runs": [
@@ -74,9 +74,9 @@
           "operational_readiness": "READY",
           "optimization_attempt_count": 1,
           "repetition": 1,
-          "solver_runtime_seconds": 0.13999999999941792,
+          "solver_runtime_seconds": 6.141000000000076,
           "status": "OPTIMAL",
-          "wall_clock_seconds": 0.12150610000026063
+          "wall_clock_seconds": 6.1446350000001075
         },
         {
           "all_objectives_proven_optimal": true,
@@ -85,9 +85,9 @@
           "operational_readiness": "READY",
           "optimization_attempt_count": 1,
           "repetition": 2,
-          "solver_runtime_seconds": 0.11000000000058208,
+          "solver_runtime_seconds": 6.155999999999949,
           "status": "OPTIMAL",
-          "wall_clock_seconds": 0.11333469999954104
+          "wall_clock_seconds": 6.145157200000085
         },
         {
           "all_objectives_proven_optimal": true,
@@ -96,21 +96,21 @@
           "operational_readiness": "READY",
           "optimization_attempt_count": 1,
           "repetition": 3,
-          "solver_runtime_seconds": 0.10899999999946886,
+          "solver_runtime_seconds": 6.108999999999924,
           "status": "OPTIMAL",
-          "wall_clock_seconds": 0.11175659999935306
+          "wall_clock_seconds": 6.115559299999859
         }
       ],
-      "solver_time_limit_seconds": 5.0
+      "solver_time_limit_seconds": 30.0
     },
     {
-      "candidate_assignment_count": 6,
-      "description": "Fictional ready 24-movement day with overlapping work, mixed service classes, heavy turns, qualifications, breaks, fairness, and continuity.",
-      "employee_count": 21,
-      "fixed_assignment_count": 72,
-      "flight_count": 24,
-      "median_solver_runtime_seconds": 0.2649999999994179,
-      "median_wall_clock_seconds": 0.258828099999846,
+      "candidate_assignment_count": 103,
+      "description": "Eighteen fictional movements spanning the early and late teams with all Phase 1 optimization features.",
+      "employee_count": 18,
+      "fixed_assignment_count": 2,
+      "flight_count": 18,
+      "median_solver_runtime_seconds": 19.047000000000025,
+      "median_wall_clock_seconds": 19.04567739999993,
       "name": "full-day",
       "repeat_count": 3,
       "runs": [
@@ -121,9 +121,9 @@
           "operational_readiness": "READY",
           "optimization_attempt_count": 1,
           "repetition": 1,
-          "solver_runtime_seconds": 0.2649999999994179,
+          "solver_runtime_seconds": 19.014999999999873,
           "status": "OPTIMAL",
-          "wall_clock_seconds": 0.258828099999846
+          "wall_clock_seconds": 19.032529200000226
         },
         {
           "all_objectives_proven_optimal": true,
@@ -132,23 +132,23 @@
           "operational_readiness": "READY",
           "optimization_attempt_count": 1,
           "repetition": 2,
-          "solver_runtime_seconds": 0.26600000000053114,
+          "solver_runtime_seconds": 19.047000000000025,
           "status": "OPTIMAL",
-          "wall_clock_seconds": 0.26223529999970197
+          "wall_clock_seconds": 19.04567739999993
         },
         {
-          "all_objectives_proven_optimal": true,
-          "objective_optimality_state": "ALL_PROVEN_OPTIMAL",
+          "all_objectives_proven_optimal": false,
+          "objective_optimality_state": "NOT_ALL_PROVEN_OPTIMAL",
           "objective_stage_count": 17,
-          "operational_readiness": "READY",
+          "operational_readiness": "READY_WITH_WARNINGS",
           "optimization_attempt_count": 1,
           "repetition": 3,
-          "solver_runtime_seconds": 0.25,
-          "status": "OPTIMAL",
-          "wall_clock_seconds": 0.2570760999997219
+          "solver_runtime_seconds": 30.016000000000076,
+          "status": "FEASIBLE",
+          "wall_clock_seconds": 30.008027100000163
         }
       ],
-      "solver_time_limit_seconds": 5.0
+      "solver_time_limit_seconds": 30.0
     }
   ],
   "schema_version": 1,

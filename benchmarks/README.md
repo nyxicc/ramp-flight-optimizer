@@ -18,34 +18,44 @@ was produced from the repository implementation with three repetitions per size.
 
 ## Scenarios
 
-All three inputs are deterministic subsets or the complete form of the public
-normal scenario. They use aware datetimes, a fixed solver seed, one solver worker,
-and a five-second total time limit per optimizer attempt.
+All three inputs are deterministic subsets of the public, decision-heavy normal
+scenario. They use aware datetimes, a fixed solver seed, one solver worker, and a
+30-second total time limit per optimizer attempt. The budget is long enough for
+the larger input to exercise the lower-priority fairness, workload, and continuity
+stages on the baseline machine; it does not guarantee proof completion elsewhere.
 
 | Size | Construction | Features |
 |---|---|---|
-| `small` | First 3 movements and the fictional morning team | Real candidates, fixed assignments, overlapping decisions, staffing, and qualifications |
+| `small` | First 3 movements and the fictional morning team | Overlapping decisions, minimum staffing, qualifications, breaks, and the complete objective sequence |
 | `medium` | First 12 movements and the fictional daytime team | More shifts and overlaps, qualifications, breaks, fairness, streaks, workload, and continuity |
-| `full-day` | All 24 movements and all 21 fictional employees | Arrivals, departures, turns, Mainline, Express, heavy flights, overlaps, fixed work, role filtering, protected breaks, all 17 objectives, and readiness reporting |
+| `full-day` | 18 movements spanning the early and late teams | Arrivals, departures, turns, Mainline, Express, heavy flights, overlaps, role filtering, protected breaks, all 17 objectives, and readiness reporting |
 
-The scenarios deliberately contain non-fixed candidate assignments. Fixed records
-exercise the real fixed-assignment path but do not predetermine the result.
+Small and medium contain one fixed assignment, while full-day contains two,
+solely to exercise that feature and break limited assignment symmetry. The
+remaining legal candidate sets contain 14, 70, and 103 employee-flight choices,
+respectively, so the optimizer chooses the substantial majority of final work.
+Every flight has at least three free eligible candidates, including flights that
+also contain the fixed record.
 
 ## Checked-in baseline results
 
-`baseline.json` was generated at `2026-09-08T16:24:52.421416Z` with CPython
+`baseline.json` was generated at `2026-09-08T17:39:08.551602Z` with CPython
 3.12.0 on Windows 11 AMD64, using three repetitions and the documented
-single-worker, five-second solve setting.
+single-worker, 30-second solve setting.
 
 | Size | Employees | Flights | Candidates | Fixed | Attempts/run | Final status | Objectives | Readiness | Median solver (s) | Median wall (s) |
 |---|---:|---:|---:|---:|---:|---|---|---|---:|---:|
-| `small` | 9 | 3 | 3 | 9 | 1 | `OPTIMAL` | 17/17 proven | `MANUAL_INTERVENTION_REQUIRED` | 0.047000 | 0.042565 |
-| `medium` | 11 | 12 | 4 | 36 | 1 | `OPTIMAL` | 17/17 proven | `READY` | 0.110000 | 0.113335 |
-| `full-day` | 21 | 24 | 6 | 72 | 1 | `OPTIMAL` | 17/17 proven | `READY` | 0.265000 | 0.258828 |
+| `small` | 9 | 3 | 14 | 1 | 1 | 3 `OPTIMAL` | 17/17 proven in 3/3 | 3 `MANUAL_INTERVENTION_REQUIRED` | 0.266000 | 0.268019 |
+| `medium` | 11 | 12 | 70 | 1 | 1 | 3 `OPTIMAL` | 17/17 proven in 3/3 | 3 `READY` | 6.141000 | 6.144635 |
+| `full-day` | 18 | 18 | 103 | 2 | 1 | 2 `OPTIMAL`; 1 `FEASIBLE` | 17 stages reached; 2/3 all proven | 2 `READY`; 1 `READY_WITH_WARNINGS` | 19.047000 | 19.045677 |
 
 Candidate counts are legal, non-fixed employee-flight decisions. The small
 subset intentionally demonstrates that solver optimality and operational readiness
-are separate; its best legal result still requires intervention.
+are separate; its best legal result still requires intervention. One full-day
+repetition used the complete 30-second budget while working on the final continuity
+objective. Its usable result and all higher-priority proofs were preserved, the
+last stage remained explicitly unproven, and readiness carried the corresponding
+solver-proof warning.
 
 ## Measurement
 

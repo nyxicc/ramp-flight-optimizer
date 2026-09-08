@@ -36,10 +36,22 @@ Those integration concerns belong to a possible Phase 2.
 
 ## Install
 
-Python 3.12 or newer is required.
+Python 3.12 or newer is required. Create and activate an isolated environment
+before installing the package.
+
+Windows PowerShell:
+
+```powershell
+python -m venv .venv
+.venv\Scripts\Activate.ps1
+python -m pip install -e ".[dev]"
+```
+
+macOS or Linux:
 
 ```bash
-python -m venv .venv
+python3 -m venv .venv
+source .venv/bin/activate
 python -m pip install -e ".[dev]"
 ```
 
@@ -77,7 +89,7 @@ existing reporting layer.
 
 | Scenario | Purpose | Expected readiness |
 |---|---|---|
-| `normal` | 24 mixed movements, overlapping windows, multiple shifts, qualifications, protected breaks, workload, and continuity | `READY` without emergency recovery |
+| `normal` | 24 decision-heavy mixed movements, overlapping windows, multiple shifts, qualifications, protected breaks, workload, and continuity | Operationally ready without emergency recovery; may be `READY_WITH_WARNINGS` when the solve budget ends before every lower-priority objective is proven |
 | `shortage` | A valid flight with too few eligible Agents | `MANUAL_INTERVENTION_REQUIRED` with a useful partial schedule |
 | `emergency-lead` | Agent-only minimum staffing is impossible, but one Lead can recover it | `READY_WITH_WARNINGS` with explicit Lead use |
 
@@ -98,8 +110,8 @@ The beginning of the normal fictional report is:
 
 ```text
 Ramp Team Flight Optimizer
-Readiness: READY
-Solver: OPTIMAL; all objectives proven optimal: yes
+Readiness: READY_WITH_WARNINGS
+Solver: FEASIBLE; all objectives proven optimal: no
 Emergency recovery: enabled=no; disposition=NOT_ENABLED; Lead assignments=0
 Flights: 24; minimum staffed 24/24; below minimum 0; preferred staffed 3
 Qualifications: compliant 15/15; missing push 0; missing close-out 0
@@ -108,11 +120,14 @@ Assignments: 75; participating employees 16
 Lead interventions:
 - None
 Warnings:
-- None
+- [WARNING] SOLVER_RESULT_NOT_PROVEN_OPTIMAL: A usable schedule was returned, but not every optimization stage was proven optimal.
 ```
 
-Exact runtimes and the chosen assignments depend on the configured solve budget
-and installed solver version; report sections and record ordering are stable.
+This measured example exhausted the normal scenario's 30-second default while
+preserving complete minimum staffing, qualification coverage, and protected
+breaks. A faster environment may prove all 17 stages and report `READY`. Exact
+runtimes and assignments depend on the configured budget and installed solver
+version; report sections and record ordering are stable.
 
 ## Flight model in brief
 

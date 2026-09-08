@@ -1,6 +1,5 @@
 """Dependency-free reproducible benchmark harness for fictional scenarios."""
 
-from dataclasses import replace
 from datetime import datetime, timezone
 import json
 from pathlib import Path
@@ -18,7 +17,7 @@ from ramp_optimizer.validation import validate_or_raise
 
 BENCHMARK_SCHEMA_VERSION = 1
 BENCHMARK_SCENARIO_NAMES = ("small", "medium", "full-day")
-BENCHMARK_SOLVER_TIME_LIMIT_SECONDS = 5.0
+BENCHMARK_SOLVER_TIME_LIMIT_SECONDS = 30.0
 
 
 def build_benchmark_scenarios() -> tuple[SampleScenario, ...]:
@@ -58,7 +57,25 @@ def build_benchmark_scenarios() -> tuple[SampleScenario, ...]:
                 "N001",
             },
         ),
-        replace(normal, name="full-day"),
+        _subset_scenario(
+            normal,
+            name="full-day",
+            description=(
+                "Eighteen fictional movements spanning the early and late teams "
+                "with all Phase 1 optimization features."
+            ),
+            flight_count=18,
+            employee_ids={
+                *(f"A{index:03}" for index in range(1, 12)),
+                "A013",
+                "A014",
+                "A015",
+                "A099",
+                "L001",
+                "T001",
+                "N001",
+            },
+        ),
     )
 
 

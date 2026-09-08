@@ -133,36 +133,9 @@ def build_normal_scenario(
         _turn("SYN3111", 22, 30, "SYN3211", 23, 30, gate="D23"),
         _arrival("SYN110", 23, 10, gate="D24"),
     )
-    minimum_crews = (
-        ("A001", "A002", "A005"),
-        ("A003", "A004", "A006"),
-        ("A001", "A003", "A005"),
-        ("A002", "A004", "A006"),
-        ("A001", "A003", "A013"),
-        ("A002", "A005", "A006"),
-        ("A001", "A002", "A003"),
-        ("A005", "A006", "A007"),
-        ("A001", "A002", "A003"),
-        ("A005", "A006", "A007"),
-        ("A001", "A003", "A005"),
-        ("A002", "A006", "A007"),
-        ("A007", "A008", "A013"),
-        ("A009", "A010", "A011"),
-        ("A007", "A008", "A010"),
-        ("A009", "A011", "A014"),
-        ("A008", "A009", "A010"),
-        ("A011", "A014", "A015"),
-        ("A008", "A009", "A010"),
-        ("A011", "A014", "A015"),
-        ("A008", "A009", "A012"),
-        ("A010", "A014", "A015"),
-        ("A008", "A012", "A014"),
-        ("A009", "A015", "A016"),
-    )
-    fixed = tuple(
-        FixedAssignment(employee_id, flight)
-        for flight, crew in zip(flights, minimum_crews, strict=True)
-        for employee_id in crew
+    fixed = (
+        FixedAssignment("A001", flights[0]),
+        FixedAssignment("A014", flights[17]),
     )
     config = _config_with_time_limit(
         OptimizerConfig(), solver_time_limit_seconds

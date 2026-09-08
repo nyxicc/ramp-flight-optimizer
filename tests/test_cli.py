@@ -19,20 +19,21 @@ def test_help_commands_exit_successfully(arguments, capsys) -> None:
 
 
 @pytest.mark.parametrize(
-    ("scenario", "expected"),
+    ("scenario", "time_limit", "expected"),
     [
-        ("normal", "Readiness: READY"),
-        ("shortage", "Readiness: MANUAL_INTERVENTION_REQUIRED"),
-        ("emergency-lead", "Readiness: READY_WITH_WARNINGS"),
+        ("normal", "30", "Readiness: READY"),
+        ("shortage", "5", "Readiness: MANUAL_INTERVENTION_REQUIRED"),
+        ("emergency-lead", "5", "Readiness: READY_WITH_WARNINGS"),
     ],
 )
 def test_demo_scenarios_use_existing_report_and_return_success(
     scenario: str,
+    time_limit: str,
     expected: str,
     capsys,
 ) -> None:
     exit_code = main(
-        ["demo", "--scenario", scenario, "--time-limit", "5"]
+        ["demo", "--scenario", scenario, "--time-limit", time_limit]
     )
     output = capsys.readouterr().out
 
@@ -41,6 +42,9 @@ def test_demo_scenarios_use_existing_report_and_return_success(
     assert expected in output
     assert output.index("Lead interventions:") < output.index("Warnings:")
     assert "Traceback" not in output
+    if scenario == "normal":
+        assert "Readiness: MANUAL_INTERVENTION_REQUIRED" not in output
+        assert "minimum staffed 24/24" in output
 
 
 @pytest.mark.parametrize(

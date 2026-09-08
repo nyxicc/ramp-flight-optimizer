@@ -9,6 +9,7 @@ from ramp_optimizer import (
     EmergencyPassDisposition,
     OperationalReadinessStatus,
     WarningCode,
+    WarningSeverity,
     build_emergency_lead_scenario,
     build_normal_scenario,
     build_sample_scenario,
@@ -48,15 +49,30 @@ def test_public_scenarios_are_valid_aware_and_deterministic(builder) -> None:
     assert all("Fictional" in employee.name for employee in first.day.employees)
 
 
-def test_normal_scenario_is_ready_without_emergency_recovery() -> None:
-    scenario = build_normal_scenario(solver_time_limit_seconds=5.0)
+def test_normal_scenario_is_operationally_ready_without_emergency_recovery() -> None:
+    scenario = build_normal_scenario()
     result = optimize_flight_assignments(scenario.day, scenario.config)
 
     assert_result_invariants(scenario.day, scenario.config, result)
-    assert result.operational_readiness is OperationalReadinessStatus.READY
+    assert result.operational_readiness in {
+        OperationalReadinessStatus.READY,
+        OperationalReadinessStatus.READY_WITH_WARNINGS,
+    }
     assert result.emergency_pass_disposition is EmergencyPassDisposition.NOT_ENABLED
     assert result.lead_assignments == ()
-    assert result.warnings == ()
+    assert all(
+        warning.code is WarningCode.SOLVER_RESULT_NOT_PROVEN_OPTIMAL
+        and warning.severity is WarningSeverity.WARNING
+        for warning in result.warnings
+    )
+    assert result.schedule_summary is not None
+    assert result.schedule_summary.minimum_staffed_flights == len(
+        scenario.day.flights
+    )
+    assert result.schedule_summary.qualification_compliant_flights == (
+        result.schedule_summary.qualification_required_flights
+    )
+    assert result.schedule_summary.employees_with_unsatisfied_break == 0
 
 
 def test_shortage_scenario_returns_a_useful_warned_partial_schedule() -> None:

@@ -22,6 +22,10 @@ dev = [
 where = ["src"]
 
 [tool.pytest.ini_options]
-addopts = "-ra"
+addopts = "-ra --basetemp=.pytest-tmp"
 pythonpath = ["src"]
 testpaths = ["tests"]
+markers = [
+    "integration: end-to-end optimizer scenarios spanning multiple layers",
+    "slow: bounded performance scenarios excluded from the fast feedback suite",
+]

@@ -689,6 +689,8 @@ def test_empty_day_and_no_employee_day_remain_valid() -> None:
     assert no_employees.employee_results == ()
 
 
+@pytest.mark.integration
+@pytest.mark.slow
 def test_moderate_synthetic_day_break_model_completes_within_solver_budget() -> None:
     start = at(7)
     flights = tuple(

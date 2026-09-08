@@ -654,6 +654,8 @@ def test_fairness_stage_timeout_preserves_the_last_feasible_schedule(
         assert result.fairness_metrics.flight_count_spread == 0
 
 
+@pytest.mark.integration
+@pytest.mark.slow
 def test_moderate_mixed_day_completes_with_fairness_and_priorities() -> None:
     flights = (
         arrival("101", 8, 0),

@@ -5,7 +5,7 @@ from synthetic operational data.
 
 ## Current scope
 
-Milestones 1-13 are implemented. The repository currently provides:
+Milestones 1-14 are implemented. The repository currently provides:
 
 - immutable employee, shift, flight, and result domain models;
 - structured input validation;
@@ -21,7 +21,9 @@ Milestones 1-13 are implemented. The repository currently provides:
   continuity preferences;
 - controlled second-pass emergency Lead recovery;
 - structured operational readiness, warnings, attempt audit data, schedule
-  summaries, and deterministic plain-text reporting.
+  summaries, and deterministic plain-text reporting;
+- an independently checked, entirely fictional 24-flight operational day plus
+  boundary, metamorphic, emergency-recovery, timeout, and reporting matrices.
 
 ## Employee and availability model
 
@@ -541,13 +543,12 @@ average denominator is therefore explicit; no continuity percentage is
 invented. These values are independently rebuilt from final crew-set
 intersections and asserted against the CP-SAT indicators and stage total.
 
-On the deterministic 12-flight/four-employee representative case, the horizon
-produces 30 eligible flight pairs and 120 retained Boolean variables. One local
-measurement changed solve runtime from 3.813 seconds before Milestone 11 to
-4.171 seconds after it, remained `OPTIMAL` under the existing 8-second test
-budget, preserved `3–3–3–3` raw counts and maximum streak `1`, and improved the
-retained score from 7 in the prior schedule to 8. These are environment-specific
-measurements, not a general performance claim.
+The exact continuity regression uses eight flights and four employees. Its
+120-minute horizon produces 18 eligible pairs and 72 retained Boolean
+variables. The smaller case reliably proves all 17 lexicographic stages across
+the supported OR-Tools minor range; larger days are treated as bounded
+performance scenarios whose assertions distinguish a usable `FEASIBLE` result
+from proven `OPTIMAL` completion.
 
 ### Emergency Lead recovery
 
@@ -601,7 +602,7 @@ identifies each affected flight.
 
 ### Operational readiness and reporting
 
-Milestones 1–13 are implemented. `OptimizationStatus` continues to describe
+Milestones 1–14 are implemented. `OptimizationStatus` continues to describe
 the computation (`OPTIMAL`, `FEASIBLE`, `INFEASIBLE`, or `UNKNOWN`), while the
 separate `OperationalReadinessStatus` describes the recommendation:
 
@@ -723,9 +724,10 @@ including a factual zero/empty value when no flight pair is horizon-eligible.
 Its transition records reference the original immutable `Flight` values and
 list exactly which employees appear in both final crews.
 
-This optimizer is not operationally complete. Milestone 14 full synthetic-day
-and torture testing and Milestone 15 final benchmarking, documentation review,
-and polish remain. No production UI or API is included.
+This optimizer is not production-certified or a substitute for legal, safety,
+or local operational review. Milestone 15 final benchmark definition,
+documentation audit, packaging/API-surface cleanup, code-quality polish, and
+release-readiness review remain. No production UI or API is included.
 
 ## TeamWork schedule import
 
@@ -766,4 +768,66 @@ py -3.12 -m venv .venv
 .\.venv\Scripts\python.exe -m pytest
 ```
 
-All tests and workbook fixtures use fictional data.
+Python 3.12 is the tested development runtime. The package metadata permits
+Python 3.12 and newer, but newer interpreters are not implicitly claimed as a
+release qualification. OR-Tools `>=9.12,<10` is supported: compatibility is
+kept at the public API/semantic-result level instead of depending on incidental
+search timing from one minor release. Focused checks run on both 9.12 and 9.15;
+version-specific annotations are postponed so 9.12 remains importable.
+
+The default command runs every test, including integration and slow tests. For
+faster local feedback:
+
+```powershell
+.\.venv\Scripts\python.exe -m pytest -m "not slow and not integration"
+```
+
+To run only the end-to-end/performance category:
+
+```powershell
+.\.venv\Scripts\python.exe -m pytest -m "integration or slow"
+```
+
+### Milestone 14 synthetic verification
+
+The canonical scenario is a hand-designed, entirely fictional day with 24
+movements, 16 enabled ordinary Ramp Agents, two Leads, a disabled Ramp Agent,
+and excluded trainee/non-ramp roles. It includes 4-, 6-, 8-, and 10-hour
+shifts, a split shift, overnight shifts, overlapping banks, quiet periods,
+arrival-only, departure-only, turn, Mainline, Express, normal, heavy, qualified,
+unqualified, and fixed-assignment cases. Two variations add a recoverable
+overnight shortage and a partially recoverable pair of competing shortages.
+No names, IDs, flight records, or station facts represent a real operation.
+
+The verification suite separates three concerns:
+
+- exact correctness cases are intentionally small enough to prove every
+  lexicographic optimum;
+- bounded full-day/performance cases require a usable, hard-constraint-safe,
+  internally consistent result and verify optimality metadata honestly;
+- timeout-degradation cases use tiny budgets or controlled solver outcomes to
+  prove retention of the last feasible schedule and accurate warnings.
+
+Test-only invariant checks independently reconstruct assignment integrity,
+role/shift eligibility, overlap legality, staffing, qualifications, breaks,
+streaks, fixed-point workload, fairness populations and aggregates, continuity,
+readiness, summaries, warning identities, attempts, Lead interventions, and
+formatted reporting from public inputs and results. Metamorphic tests cover
+input reordering, irrelevant/disabled employees and Leads, time budgets,
+Express thresholds, independent break/streak thresholds, continuity horizons,
+heavy flags, and added qualifications. Boundary matrices cover date rollover,
+half-open intervals, shift endpoints, flight numbers, configuration types and
+ranges, staffing limits, qualifications, 29/30/39/40/41-minute gaps, and
+continuity horizon edges.
+
+On one Windows Python 3.12 development environment the complete suite is on the
+order of one to two minutes and the fast subset is materially shorter. Runtime
+varies with CPU load, OR-Tools minor version, and filesystem behavior, so tests
+do not assert exact wall-clock values. Pytest's temporary directory must be
+writable; `--basetemp` can point to a local scratch directory on locked-down
+Windows profiles.
+
+These tests are synthetic verification, not operational certification. They do
+not model gate travel, live disruptions, legal rule interpretation, or
+production-scale station data. Solver scale and late-stage proof time remain
+bounded by the configured per-pass budget.

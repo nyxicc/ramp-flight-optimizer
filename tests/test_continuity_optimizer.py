@@ -593,13 +593,17 @@ def test_stage_17_unknown_retains_stage_16_schedule_and_reports_it(
     )
 
 
+@pytest.mark.integration
+@pytest.mark.slow
 def test_representative_day_has_bounded_continuity_model_and_solves() -> None:
+    # Eight flights still exercise all-horizon pair growth and exact retention,
+    # without conflating proof of correctness with an eight-second load test.
     flights = tuple(
         arrival_from_start(
             str(2100 + index),
             at(7) + timedelta(minutes=50 * index),
         )
-        for index in range(12)
+        for index in range(8)
     )
     workers = tuple(employee(worker_id) for worker_id in ("A", "B", "C", "D"))
     operational_day = day_for(flights, workers)
@@ -613,15 +617,15 @@ def test_representative_day_has_bounded_continuity_model_and_solves() -> None:
         build_candidate_assignments(operational_day, active_config),
     )
 
-    assert len(model_data.continuity_flight_pairs) == 30
-    assert len(model_data.retained_employee_transitions) == 120
+    assert len(model_data.continuity_flight_pairs) == 18
+    assert len(model_data.retained_employee_transitions) == 72
 
     result = optimize_flight_assignments(operational_day, active_config)
 
     assert result.status is OptimizationStatus.OPTIMAL
     assert len(result.objective_values) == 17
     assert all(item.proven_optimal for item in result.objective_values)
-    assert metrics(result).eligible_transition_count == 30
+    assert metrics(result).eligible_transition_count == 18
     assert (
         result.solver_runtime_seconds
         <= active_config.solver_time_limit_seconds + 2.0

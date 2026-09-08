@@ -1,5 +1,7 @@
 """Lexicographic ramp optimizer with optional emergency-Lead recovery."""
 
+from __future__ import annotations
+
 from dataclasses import dataclass, replace
 from datetime import datetime, timedelta
 from itertools import combinations

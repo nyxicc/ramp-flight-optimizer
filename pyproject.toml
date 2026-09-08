@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "ramp-flight-optimizer"
 version = "0.1.0"
-description = "A synthetic ramp-team flight scheduling optimization project."
+description = "A deterministic synthetic ramp-team flight assignment optimizer."
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
@@ -17,6 +17,9 @@ dependencies = [
 dev = [
     "pytest>=8,<9",
 ]
+
+[project.scripts]
+ramp-optimizer = "ramp_optimizer.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

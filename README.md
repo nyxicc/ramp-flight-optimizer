@@ -11,10 +11,10 @@ lexicographic objective hierarchy rather than one blended score.
 
 ## Project status
 
-Phase 1—the standalone optimization engine—is complete. Phase 2 Milestone 16 adds
-a versioned FastAPI adapter around that engine. The repository still has no web
-UI, database, background jobs, authentication, deployment, OCR, schedule-image
-parsing, or live airline data.
+Phase 1—the standalone optimization engine—is complete. Phase 2 Milestones 16 and
+17 add a versioned FastAPI adapter and immutable SQLite development persistence.
+The repository still has no web UI, background jobs, authentication, deployment,
+OCR, schedule-image parsing, or live airline data.
 
 ## Capabilities
 
@@ -60,6 +60,7 @@ To develop or test the API, install both optional groups:
 
 ```bash
 python -m pip install -e ".[api,dev]"
+python -m alembic upgrade head
 ```
 
 ## Quick start
@@ -96,7 +97,9 @@ python -m uvicorn ramp_optimizer_api.app:app --reload --host 127.0.0.1
 ```
 
 The `/api/v1` contract provides health and version information, domain validation,
-and synchronous optimization. Staffing shortages and valid partial schedules are
+synchronous optimization, immutable operational-day snapshots, and stored results.
+See [docs/PERSISTENCE.md](docs/PERSISTENCE.md) for configuration and migration details.
+Staffing shortages and valid partial schedules are
 returned as structured HTTP `200` results; invalid optimizer input uses a stable
 HTTP `422` error envelope. See the [API contract](docs/API.md) for request and
 response examples, fixed-flight references, serialization rules, and limitations.

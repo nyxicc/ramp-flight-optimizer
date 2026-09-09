@@ -1,9 +1,11 @@
 """FastAPI application boundary for synchronous version 1 optimization."""
 
 from importlib.metadata import version as distribution_version
-from typing import Any
+from datetime import date
+from typing import Annotated, Any
+from uuid import UUID
 
-from fastapi import APIRouter, FastAPI, Request
+from fastapi import APIRouter, FastAPI, Query, Request, status
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
@@ -24,6 +26,13 @@ from ramp_optimizer_api.mapping import (
     optimization_result_to_response,
     validation_issue_to_response,
 )
+from ramp_optimizer_api.policy import enforce_synchronous_policy
+from ramp_optimizer_api.resource_mapping import (
+    operational_day_resource_response,
+    operational_day_summary_response,
+    optimization_run_resource_response,
+    optimization_run_summary_response,
+)
 from ramp_optimizer_api.schemas import (
     ErrorBody,
     ErrorDetail,
@@ -31,18 +40,40 @@ from ramp_optimizer_api.schemas import (
     HealthResponse,
     OptimizationRequest,
     OptimizationResponse,
+    OperationalDayListResponse,
+    OperationalDayResourceResponse,
+    OptimizationRunListResponse,
+    OptimizationRunResourceResponse,
     ValidationResponse,
     VersionResponse,
 )
+from ramp_optimizer_api.services import PersistenceService
+from ramp_optimizer_persistence.database import (
+    SessionFactory,
+    create_database_engine,
+    make_session_factory,
+)
+from ramp_optimizer_persistence.errors import (
+    DatabaseOperationError,
+    PersistenceConflictError,
+    PersistenceIntegrityError,
+    ResourceNotFoundError,
+)
+from ramp_optimizer_persistence.settings import DatabaseSettings
 
 
 API_VERSION = "1"
 API_PREFIX = "/api/v1"
 PACKAGE_DISTRIBUTION = "ramp-flight-optimizer"
-MAX_SYNCHRONOUS_SOLVER_TIME_SECONDS = 60.0
+DEFAULT_PAGE_LIMIT = 20
+MAX_PAGE_LIMIT = 100
 
 
-def create_app() -> FastAPI:
+def create_app(
+    *,
+    session_factory: SessionFactory | None = None,
+    persistence_service: PersistenceService | None = None,
+) -> FastAPI:
     """Build an independent application with no request-global mutable state."""
 
     application = FastAPI(
@@ -52,6 +83,18 @@ def create_app() -> FastAPI:
             "Versioned synchronous API adapter for the Phase 1 ramp optimizer."
         ),
     )
+    if persistence_service is None:
+        active_session_factory = session_factory
+        if active_session_factory is None:
+            settings = DatabaseSettings.from_environment()
+            active_session_factory = make_session_factory(
+                create_database_engine(settings.database_url)
+            )
+        persistence_service = PersistenceService(
+            active_session_factory,
+            api_version=API_VERSION,
+            optimizer=optimize_flight_assignments,
+        )
     _register_exception_handlers(application)
     router = APIRouter(prefix=API_PREFIX)
 
@@ -95,26 +138,103 @@ def create_app() -> FastAPI:
         if mapped.issues:
             raise FixedAssignmentReferenceError(mapped.issues)
         validate_or_raise(mapped.operational_day, mapped.config)
-        _enforce_synchronous_policy(mapped.config.solver_time_limit_seconds)
+        enforce_synchronous_policy(mapped.config.solver_time_limit_seconds)
         result = optimize_flight_assignments(mapped.operational_day, mapped.config)
         return optimization_result_to_response(result)
 
+    @router.post(
+        "/operational-days",
+        response_model=OperationalDayResourceResponse,
+        status_code=status.HTTP_201_CREATED,
+        responses={422: {"model": ErrorResponse}, 500: {"model": ErrorResponse}},
+        tags=["stored operational days"],
+    )
+    def create_stored_day(request: OptimizationRequest) -> OperationalDayResourceResponse:
+        return operational_day_resource_response(
+            persistence_service.create_operational_day(request)
+        )
+
+    @router.get(
+        "/operational-days",
+        response_model=OperationalDayListResponse,
+        tags=["stored operational days"],
+    )
+    def list_stored_days(
+        limit: Annotated[int, Query(ge=1, le=MAX_PAGE_LIMIT)] = DEFAULT_PAGE_LIMIT,
+        offset: Annotated[int, Query(ge=0)] = 0,
+        operational_date: date | None = None,
+    ) -> OperationalDayListResponse:
+        records, total = persistence_service.list_operational_days(
+            limit=limit,
+            offset=offset,
+            operational_date=operational_date,
+        )
+        return OperationalDayListResponse(
+            items=tuple(operational_day_summary_response(item) for item in records),
+            total=total,
+            limit=limit,
+            offset=offset,
+        )
+
+    @router.get(
+        "/operational-days/{operational_day_id}",
+        response_model=OperationalDayResourceResponse,
+        tags=["stored operational days"],
+    )
+    def get_stored_day(operational_day_id: UUID) -> OperationalDayResourceResponse:
+        return operational_day_resource_response(
+            persistence_service.get_operational_day(str(operational_day_id))
+        )
+
+    @router.post(
+        "/operational-days/{operational_day_id}/optimizations",
+        response_model=OptimizationRunResourceResponse,
+        status_code=status.HTTP_201_CREATED,
+        tags=["stored optimization runs"],
+    )
+    def optimize_stored_day(
+        operational_day_id: UUID,
+    ) -> OptimizationRunResourceResponse:
+        return optimization_run_resource_response(
+            persistence_service.optimize_operational_day(str(operational_day_id))
+        )
+
+    @router.get(
+        "/operational-days/{operational_day_id}/optimization-runs",
+        response_model=OptimizationRunListResponse,
+        tags=["stored optimization runs"],
+    )
+    def list_stored_runs(
+        operational_day_id: UUID,
+        limit: Annotated[int, Query(ge=1, le=MAX_PAGE_LIMIT)] = DEFAULT_PAGE_LIMIT,
+        offset: Annotated[int, Query(ge=0)] = 0,
+    ) -> OptimizationRunListResponse:
+        records, total = persistence_service.list_optimization_runs(
+            str(operational_day_id),
+            limit=limit,
+            offset=offset,
+        )
+        return OptimizationRunListResponse(
+            items=tuple(optimization_run_summary_response(item) for item in records),
+            total=total,
+            limit=limit,
+            offset=offset,
+        )
+
+    @router.get(
+        "/optimization-runs/{optimization_run_id}",
+        response_model=OptimizationRunResourceResponse,
+        tags=["stored optimization runs"],
+    )
+    def get_stored_run(
+        optimization_run_id: UUID,
+    ) -> OptimizationRunResourceResponse:
+        return optimization_run_resource_response(
+            persistence_service.get_optimization_run(str(optimization_run_id))
+        )
+
     application.include_router(router)
     return application
-
-
-def _enforce_synchronous_policy(solver_time_limit_seconds: float) -> None:
-    if solver_time_limit_seconds > MAX_SYNCHRONOUS_SOLVER_TIME_SECONDS:
-        raise SynchronousPolicyError(
-            ValidationIssue(
-                "SYNCHRONOUS_TIME_LIMIT_EXCEEDED",
-                "config.solver_time_limit_seconds",
-                (
-                    f"must not exceed {MAX_SYNCHRONOUS_SOLVER_TIME_SECONDS:g} "
-                    "seconds for the synchronous API"
-                ),
-            )
-        )
 
 
 def _register_exception_handlers(application: FastAPI) -> None:
@@ -172,6 +292,50 @@ def _register_exception_handlers(application: FastAPI) -> None:
             code="SYNCHRONOUS_POLICY_VIOLATION",
             message="Request exceeds the synchronous API safety policy.",
             details=(_issue_detail(error.issue),),
+        )
+
+    @application.exception_handler(ResourceNotFoundError)
+    async def resource_not_found_handler(
+        _request: Request,
+        _error: ResourceNotFoundError,
+    ) -> JSONResponse:
+        return _error_response(
+            404,
+            code="RESOURCE_NOT_FOUND",
+            message="The requested resource was not found.",
+        )
+
+    @application.exception_handler(PersistenceConflictError)
+    async def persistence_conflict_handler(
+        _request: Request,
+        _error: PersistenceConflictError,
+    ) -> JSONResponse:
+        return _error_response(
+            409,
+            code="PERSISTENCE_CONFLICT",
+            message="The resource conflicts with existing stored data.",
+        )
+
+    @application.exception_handler(PersistenceIntegrityError)
+    async def persistence_integrity_handler(
+        _request: Request,
+        _error: PersistenceIntegrityError,
+    ) -> JSONResponse:
+        return _error_response(
+            500,
+            code="PERSISTENCE_INTEGRITY_ERROR",
+            message="Stored resource integrity verification failed.",
+        )
+
+    @application.exception_handler(DatabaseOperationError)
+    async def database_operation_handler(
+        _request: Request,
+        _error: DatabaseOperationError,
+    ) -> JSONResponse:
+        return _error_response(
+            500,
+            code="DATABASE_OPERATION_FAILED",
+            message="The database operation could not be completed.",
         )
 
     @application.exception_handler(Exception)

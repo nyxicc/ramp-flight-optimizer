@@ -1,7 +1,7 @@
 # Version 1 API contract
 
-Phase 2 Milestone 16 exposes the completed Phase 1 optimizer through a small
-FastAPI adapter. The adapter parses structured JSON, maps it to the existing frozen
+Phase 2 Milestones 16 and 17 expose the completed Phase 1 optimizer through a small
+FastAPI adapter with optional durable snapshots. The adapter parses structured JSON, maps it to the existing frozen
 domain records, runs the existing validation and optimizer functions synchronously,
 and explicitly maps the complete public result back to JSON. It contains no
 scheduling, classification, eligibility, readiness, warning, or report policy.
@@ -33,6 +33,14 @@ request, or data-file write.
 | `GET` | `/api/v1/version` | Returns API version `1` and the installed project version from package metadata. |
 | `POST` | `/api/v1/operational-days/validate` | Maps and validates a request, returning all domain and flight-reference issues as an HTTP `200` validation result. |
 | `POST` | `/api/v1/optimizations` | Validates, runs the optimizer synchronously, and returns the complete structured result. |
+| `POST` | `/api/v1/operational-days` | Validates and creates an immutable snapshot; returns `201`. |
+| `GET` | `/api/v1/operational-days` | Lists summaries newest first; `limit` defaults to 20 and is capped at 100. |
+| `GET` | `/api/v1/operational-days/{id}` | Returns metadata and the complete resolved input. |
+| `POST` | `/api/v1/operational-days/{id}/optimizations` | Optimizes a verified snapshot, stores the complete result, and returns `201`. |
+| `GET` | `/api/v1/operational-days/{id}/optimization-runs` | Lists stored run summaries. |
+| `GET` | `/api/v1/optimization-runs/{id}` | Returns stored run metadata and complete immutable result without rerunning. |
+
+Persistent routes require an explicit `python -m alembic upgrade head` during setup. See `docs/PERSISTENCE.md` for database settings, pagination, identity, and error behavior.
 
 Interactive Swagger documentation is at `/docs`, ReDoc is at `/redoc`, and the
 OpenAPI document is at `/openapi.json`. Only operational routes use the `/api/v1`

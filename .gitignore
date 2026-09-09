@@ -2,6 +2,10 @@ __pycache__/
 *.py[cod]
 .pytest_cache/
 .pytest-tmp/
+ramp_optimizer.db
+ramp_optimizer.db-journal
+ramp_optimizer.db-wal
+ramp_optimizer.db-shm
 .venv/
 build/
 dist/

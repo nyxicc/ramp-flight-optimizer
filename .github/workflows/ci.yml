@@ -26,6 +26,11 @@ jobs:
           python -m ramp_optimizer --help
           ramp-optimizer --help
 
+      - name: Verify SQLite migration
+        env:
+          RAMP_OPTIMIZER_DATABASE_URL: sqlite:///./ci-migration.sqlite
+        run: python -m alembic upgrade head
+
       - name: Exercise the small benchmark harness
         run: python -m ramp_optimizer benchmark --scenario small --repeat 1 > small-benchmark.json
 

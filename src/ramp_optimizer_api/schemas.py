@@ -2,6 +2,7 @@
 
 from datetime import date, datetime
 from typing import Annotated
+from uuid import UUID
 
 from pydantic import (
     BaseModel,
@@ -327,3 +328,54 @@ class ErrorBody(ApiModel):
 
 class ErrorResponse(ApiModel):
     error: ErrorBody
+
+
+class OperationalDaySummaryResponse(ApiModel):
+    id: UUID
+    operational_date: date
+    created_at_utc: datetime
+    input_schema_version: int
+    input_hash: str
+    employee_count: int
+    shift_count: int
+    flight_count: int
+    fixed_assignment_count: int
+
+
+class OperationalDayResourceResponse(OperationalDaySummaryResponse):
+    input: OptimizationRequest
+
+
+class OperationalDayListResponse(ApiModel):
+    items: tuple[OperationalDaySummaryResponse, ...]
+    total: int
+    limit: int
+    offset: int
+
+
+class OptimizationRunSummaryResponse(ApiModel):
+    id: UUID
+    operational_day_id: UUID
+    created_at_utc: datetime
+    package_version: str
+    api_version: str
+    result_schema_version: int
+    input_hash: str
+    solver_status: OptimizationStatus
+    operational_readiness: OperationalReadinessStatus
+    emergency_pass_disposition: EmergencyPassDisposition
+    solver_runtime_seconds: float
+    attempt_count: int
+    objective_stage_count: int
+    warning_count: int
+
+
+class OptimizationRunResourceResponse(OptimizationRunSummaryResponse):
+    result: OptimizationResponse
+
+
+class OptimizationRunListResponse(ApiModel):
+    items: tuple[OptimizationRunSummaryResponse, ...]
+    total: int
+    limit: int
+    offset: int

@@ -49,6 +49,11 @@ def test_health_version_and_openapi_contract() -> None:
     assert paths == {
         "/api/v1/health",
         "/api/v1/version",
+        "/api/v1/operational-days",
+        "/api/v1/operational-days/{operational_day_id}",
+        "/api/v1/operational-days/{operational_day_id}/optimizations",
+        "/api/v1/operational-days/{operational_day_id}/optimization-runs",
+        "/api/v1/optimization-runs/{optimization_run_id}",
         "/api/v1/operational-days/validate",
         "/api/v1/optimizations",
     }

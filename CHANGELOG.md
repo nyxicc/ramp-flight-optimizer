@@ -3,6 +3,17 @@
 This project follows a concise, release-oriented changelog. No formal tagged
 release has been created.
 
+## Unreleased — Phase 2 Milestone 17
+
+### Added
+
+- SQLAlchemy 2.x operational-day snapshots and complete immutable optimization-run results.
+- Alembic revision `20260908_0001`, centralized SQLite configuration, canonical SHA-256 input snapshots, six persistent resource routes, and reproducibility coverage.
+
+### Scope
+
+- Persistence remains synchronous and development-oriented. No jobs, frontend, authentication, import revision workflow, OCR, editing, or deployment was added.
+
 ## Unreleased — Phase 2 Milestone 16
 
 ### Added

@@ -11,6 +11,8 @@ The HTTP boundary is an adapter around the completed engine:
 ```text
 Client
     -> versioned FastAPI adapter
+    -> application persistence service
+    -> SQLAlchemy repositories / SQLite
     -> Phase 1 application mapping
     -> existing optimizer engine
     -> structured API response
@@ -45,6 +47,7 @@ OperationalDay + OptimizerConfig
 sample_data ----> validation / optimizer / reporting <---- CLI
 benchmarking ---> validation / candidates / optimizer
 ramp_optimizer_api ---> public Phase 1 models / validation / optimizer
+ramp_optimizer_api ---> ramp_optimizer_persistence ---> SQLAlchemy
 ```
 
 Dependencies point toward the domain and solver, not back toward presentation.
@@ -76,6 +79,8 @@ package modules never import from `tests`.
 | `ramp_optimizer_api/mapping.py` | Pure conversion between API schemas and public Phase 1 records, including fixed-flight reference resolution. |
 | `ramp_optimizer_api/errors.py` | API policy and reference-resolution exceptions outside the optimizer domain. |
 | `ramp_optimizer_api/app.py` | FastAPI factory, versioned synchronous routes, and sanitized HTTP exception handling. |
+| `ramp_optimizer_api/services.py` | Short transaction orchestration around saved-input optimization. |
+| `ramp_optimizer_persistence/` | SQLAlchemy models, repositories, centralized settings, canonical serialization, and integrity checks. |
 
 ## Run sequence
 

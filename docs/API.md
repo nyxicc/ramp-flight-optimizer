@@ -42,6 +42,19 @@ request, or data-file write.
 
 Persistent routes require an explicit `python -m alembic upgrade head` during setup. See `docs/PERSISTENCE.md` for database settings, pagination, identity, and error behavior.
 
+Milestone 18A also provides `POST /api/v1/imports/teamwork-employee-schedule`,
+`GET /api/v1/imports/{import_id}` and `/preview`, and POST `/corrections` and
+`/confirm`. Uploads use multipart `workbook` plus a JSON text `metadata` field
+containing the explicit operational date and authoritative roster. See
+[the complete import contract](IMPORTS.md) for request examples, limits, privacy,
+review issues, revision conflicts, and idempotent confirmation. OpenAPI exposes
+the correction and response schemas; multipart metadata is documented there as JSON.
+
+Operational-day responses add `optimization_eligible` and `optimization_blockers`.
+An empty-flight snapshot reports `false` and `FLIGHT_DATA_REQUIRED`; stored imported
+employee-only snapshots reject optimization with `409 FLIGHT_DATA_REQUIRED`.
+Existing standalone optimizer and structured request semantics remain unchanged.
+
 Interactive Swagger documentation is at `/docs`, ReDoc is at `/redoc`, and the
 OpenAPI document is at `/openapi.json`. Only operational routes use the `/api/v1`
 prefix; there are no unversioned duplicates.
@@ -283,12 +296,13 @@ inside successful optimization results.
 
 ## Deliberate limitations
 
-Milestone 16 executes CPU-bound optimization in a normal synchronous route. There
-is no job queue, polling endpoint, persistence, cancellation workflow, WebSocket,
-or artificial queued state. Submitted operational data is neither logged nor
-written to disk, and the API makes no network calls.
+The API executes CPU-bound optimization in a normal synchronous route. Milestones
+17 and 18A provide explicit persistent snapshots and reviewed imports. There is no
+job queue, cancellation workflow, WebSocket, or artificial queued state. Submitted
+workbook bytes are not retained after bounded parsing; reviewed values persist.
+Operational payloads are not logged, and the API makes no network calls.
 
 This is a localhost development API. It has no authentication or authorization
 and does not enable permissive CORS. Production authentication, authorization,
-background execution, deployment controls, and durable storage belong to later
+background execution, deployment controls, and production storage belong to later
 milestones.

@@ -29,6 +29,8 @@ def operational_day_summary_response(
         shift_count=value.shift_count,
         flight_count=value.flight_count,
         fixed_assignment_count=value.fixed_assignment_count,
+        optimization_eligible=value.flight_count > 0,
+        optimization_blockers=() if value.flight_count else ("FLIGHT_DATA_REQUIRED",),
     )
 
 

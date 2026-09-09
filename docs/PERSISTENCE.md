@@ -32,4 +32,28 @@ The API adds `POST /api/v1/operational-days`, day detail and paginated day listi
 
 Malformed UUIDs and pagination use the existing structural `422` envelope. Unknown UUIDs return `RESOURCE_NOT_FOUND` (`404`). Integrity failures return `PERSISTENCE_INTEGRITY_ERROR`; unexpected database failures return sanitized `DATABASE_OPERATION_FAILED`. Solver warnings and manual-intervention readiness remain successful stored results.
 
-Deliberate limitations include SQLite-only verification, synchronous optimization, immutable resources without revision workflows, and no jobs, workers, UI, authentication, import workflow, OCR, manual editing, or deployment.
+Deliberate limitations include SQLite-only verification, synchronous optimization,
+immutable operational days without day-edit workflows, and no jobs, workers, UI,
+authentication, OCR, or deployment.
+
+## Reviewed imports (Milestone 18A)
+
+Forward migration `20260909_0002` adds `import_jobs` and `import_revisions` without
+editing the initial migration. Jobs contain safe metadata, status, current revision,
+issue counts, and a unique optional operational-day foreign key. Revisions have a
+composite import/revision primary key and store immutable canonical preview and
+correction JSON with an integrity hash. Neither table stores workbook bytes, note
+text, unmatched names, or client paths. Roster names and reviewed employee data are
+retained as necessary for the workflow. Metadata timestamps are UTC.
+
+A conditional revision write serializes edits and confirmations before reading.
+Each upload or correction commits its complete preview atomically. Confirmation
+creates a day, links it, and records terminal status in one transaction; repeating
+the same current revision returns the existing linkage. Foreign keys, confirmation
+consistency checks, unique linkage, and revision primary keys enforce integrity.
+
+`alembic downgrade 20260908_0001` removes import tables while preserving all days.
+Tests verify upgrade from Milestone 17, downgrade, clean upgrade from base, schema
+parity, SQLite foreign keys, uniqueness, and rollback. No migration runs on API
+import. [IMPORTS.md](IMPORTS.md) documents retention, hash/duplicate policy, API
+contracts, and the distinction between confirmable and optimizable input.

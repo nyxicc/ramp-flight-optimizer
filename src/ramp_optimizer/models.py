@@ -130,12 +130,33 @@ class ImportIssue:
 
 
 @dataclass(frozen=True, slots=True)
+class ScheduleReviewRow:
+    """Safe parsed values, including unresolved rows; never raw names or notes."""
+
+    source_row: int
+    employee_id: str | None
+    start: datetime | None
+    end: datetime | None
+    normalized_role: OperationalRole
+    vacancy: bool = False
+    excluded: bool = False
+    notes_present: bool = False
+    swapboard: bool | None = None
+    match_status: str = "UNMATCHED_EMPLOYEE"
+    formula_fields: tuple[str, ...] = ()
+    required_fields_missing: tuple[str, ...] = ()
+    source_date: date | None = None
+    imported_hours: float | None = None
+
+
+@dataclass(frozen=True, slots=True)
 class ScheduleImportResult:
     """Usable imports plus all issues discovered in the workbook."""
 
     shift_records: tuple[ShiftImportRecord, ...] = ()
     vacancies: tuple[VacancyRecord, ...] = ()
     issues: tuple[ImportIssue, ...] = ()
+    review_rows: tuple[ScheduleReviewRow, ...] = ()
 
     @property
     def shifts(self) -> tuple[EmployeeShift, ...]:

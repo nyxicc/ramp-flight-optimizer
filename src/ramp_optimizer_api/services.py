@@ -27,6 +27,8 @@ from ramp_optimizer_persistence.repositories import (
 )
 from ramp_optimizer_persistence.database import SessionFactory
 from ramp_optimizer_persistence.errors import DatabaseOperationError
+from ramp_optimizer_persistence.imports import is_imported_snapshot
+from ramp_optimizer_imports.models import ImportError
 
 
 PACKAGE_DISTRIBUTION = "ramp-flight-optimizer"
@@ -34,6 +36,11 @@ PACKAGE_DISTRIBUTION = "ramp-flight-optimizer"
 
 class PersistenceService:
     """Coordinates repositories without holding a transaction during CP-SAT."""
+
+    @property
+    def session_factory(self):
+        """Share the configured transaction boundary with other application services."""
+        return self._session_factory
 
     def __init__(
         self,
@@ -103,6 +110,14 @@ class PersistenceService:
 
     def optimize_operational_day(self, resource_id: str) -> OptimizationRunRecord:
         snapshot = self.get_operational_day(resource_id)
+        if not snapshot.day.flights:
+            try:
+                with self._session_factory() as session:
+                    imported = is_imported_snapshot(session, resource_id)
+            except SQLAlchemyError:
+                raise DatabaseOperationError("Database operation failed.") from None
+            if imported:
+                raise ImportError("FLIGHT_DATA_REQUIRED", 409)
         validate_or_raise(snapshot.day, snapshot.config)
         enforce_synchronous_policy(snapshot.config.solver_time_limit_seconds)
         result = self._optimizer(snapshot.day, snapshot.config)

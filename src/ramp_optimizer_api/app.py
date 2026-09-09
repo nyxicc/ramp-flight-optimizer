@@ -60,6 +60,11 @@ from ramp_optimizer_persistence.errors import (
     ResourceNotFoundError,
 )
 from ramp_optimizer_persistence.settings import DatabaseSettings
+from ramp_optimizer_api.import_routes import BoundedImportBody, import_router
+from ramp_optimizer_imports.models import ImportError
+from ramp_optimizer_imports.safety import UploadLimits
+from ramp_optimizer_imports.services import ImportService
+from ramp_optimizer_persistence.imports import import_transactions
 
 
 API_VERSION = "1"
@@ -73,6 +78,8 @@ def create_app(
     *,
     session_factory: SessionFactory | None = None,
     persistence_service: PersistenceService | None = None,
+    import_service: ImportService | None = None,
+    import_limits: UploadLimits | None = None,
 ) -> FastAPI:
     """Build an independent application with no request-global mutable state."""
 
@@ -96,6 +103,11 @@ def create_app(
             optimizer=optimize_flight_assignments,
         )
     _register_exception_handlers(application)
+    limits = import_limits or (import_service.limits if import_service else UploadLimits.from_environment())
+    if import_service is None:
+        import_service = ImportService(import_transactions(persistence_service.session_factory), limits=limits)
+    application.add_middleware(BoundedImportBody, max_bytes=limits.max_bytes)
+    application.include_router(import_router(import_service))
     router = APIRouter(prefix=API_PREFIX)
 
     @router.get("/health", response_model=HealthResponse, tags=["system"])
@@ -238,6 +250,12 @@ def create_app(
 
 
 def _register_exception_handlers(application: FastAPI) -> None:
+    @application.exception_handler(ImportError)
+    async def import_error_handler(_request: Request, error: ImportError) -> JSONResponse:
+        return _error_response(error.status_code, code=error.code,
+            message="The import request requires review or correction.",
+            details=tuple(ErrorDetail(code=i.code, path=i.field or "import", message=i.message) for i in error.issues))
+
     @application.exception_handler(RequestValidationError)
     async def request_validation_handler(
         _request: Request,

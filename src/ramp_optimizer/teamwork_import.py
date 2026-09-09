@@ -6,7 +6,7 @@ from hashlib import sha256
 from math import isfinite
 from os import PathLike
 from pathlib import Path
-from typing import Iterable, Mapping, Sequence
+from typing import BinaryIO, Iterable, Mapping, Sequence
 
 from openpyxl import load_workbook
 from openpyxl.utils.datetime import from_excel
@@ -18,6 +18,7 @@ from ramp_optimizer.models import (
     EmployeeShift,
     ImportIssue,
     ScheduleImportResult,
+    ScheduleReviewRow,
     ShiftImportRecord,
     VacancyRecord,
 )
@@ -31,7 +32,7 @@ KNOWN_HEADERS = REQUIRED_HEADERS | OPTIONAL_HEADERS
 
 
 def import_teamwork_schedule(
-    workbook_path: str | PathLike[str],
+    workbook_path: str | PathLike[str] | BinaryIO,
     roster: Iterable[Employee],
     config: TeamWorkImportConfig | None = None,
 ) -> ScheduleImportResult:
@@ -54,15 +55,16 @@ def import_teamwork_schedule(
 
     try:
         workbook = load_workbook(
-            filename=Path(workbook_path), read_only=True, data_only=True
+            filename=Path(workbook_path) if isinstance(workbook_path, (str, PathLike)) else workbook_path,
+            read_only=True, data_only=False, keep_links=False
         )
-    except Exception as error:  # openpyxl exposes several format-specific errors
+    except Exception:  # openpyxl exposes several format-specific errors
         return ScheduleImportResult(
             issues=(
                 ImportIssue(
                     IssueSeverity.FATAL,
                     "WORKBOOK_OPEN_FAILED",
-                    f"Workbook could not be opened ({type(error).__name__}).",
+                    "Workbook could not be opened.",
                 ),
             )
         )
@@ -89,13 +91,17 @@ def import_teamwork_schedule(
         assert header_row is not None
 
         return _import_rows(
-            sheet.iter_rows(min_row=header_row + 1, values_only=True),
+            (_safe_cell_values(row) for row in sheet.iter_rows(min_row=header_row + 1)),
             first_source_row=header_row + 1,
             columns=columns,
             roster=tuple(roster),
             config=active_config,
             workbook_epoch=workbook.epoch,
         )
+    except Exception:  # lazy worksheet parsing can also fail
+        return ScheduleImportResult(issues=(ImportIssue(
+            IssueSeverity.FATAL, "WORKBOOK_OPEN_FAILED", "Workbook could not be parsed."
+        ),))
     finally:
         workbook.close()
 
@@ -218,6 +224,7 @@ def _import_rows(
 ) -> ScheduleImportResult:
     issues: list[ImportIssue] = []
     shift_records: list[ShiftImportRecord] = []
+    review_rows: list[ScheduleReviewRow] = []
     vacancies: list[VacancyRecord] = []
     seen_rows: dict[str, int] = {}
     roster_by_name: dict[str, list[Employee]] = defaultdict(list)
@@ -249,30 +256,57 @@ def _import_rows(
         )
 
         fingerprint = _row_fingerprint(values)
-        if fingerprint in seen_rows:
+        duplicate_of = seen_rows.get(fingerprint)
+        seen_rows.setdefault(fingerprint, source_row)
+        if duplicate_of is not None:
             action = "retained as a distinct vacancy" if is_vacancy else "ignored"
-            issues.append(
-                ImportIssue(
-                    IssueSeverity.WARNING,
-                    "DUPLICATE_SCHEDULE_ROW",
-                    f"Row duplicates schedule data from row {seen_rows[fingerprint]} and was {action}.",
-                    source_row=source_row,
-                )
-            )
-            if not is_vacancy:
-                continue
-        else:
-            seen_rows[fingerprint] = source_row
+            issues.append(ImportIssue(
+                IssueSeverity.WARNING, "DUPLICATE_SCHEDULE_ROW",
+                f"Row duplicates schedule data from row {duplicate_of} and was {action}.",
+                source_row=source_row,
+            ))
 
+        formula_fields = tuple(sorted(
+            field for field in REQUIRED_HEADERS
+            if values.get(field) == "="
+        ))
+        for field in formula_fields:
+            issues.append(ImportIssue(
+                IssueSeverity.ERROR, "FORMULA_VALUE_UNAVAILABLE",
+                "Formula values require an explicit reviewed replacement.",
+                source_row=source_row, column=field,
+            ))
         interval = _parse_interval(
-            values.get("date"),
-            values.get("start"),
-            values.get("end"),
-            workbook_epoch,
-            source_row,
-            config,
-            issues,
+            values.get("date"), values.get("start"), values.get("end"),
+            workbook_epoch, source_row, config, issues,
+            retain_invalid_range=True,
         )
+        matches = roster_by_name.get(employee_name_key, [])
+        role = role_mapping.get(normalize_position_label(source_position), OperationalRole.UNKNOWN)
+        match_status = ("VACANCY" if is_vacancy else "MATCHED" if len(matches) == 1
+                        else "AMBIGUOUS_EMPLOYEE" if matches else "UNMATCHED_EMPLOYEE")
+        swapboard = _parse_swapboard(values.get("swapboard"), source_row, issues)
+        if interval:
+            _validate_hours(values.get("hours"), interval, source_row, config, issues)
+        supplied_hours = values.get("hours")
+        review_rows.append(ScheduleReviewRow(
+            source_row=source_row,
+            employee_id=matches[0].employee_id if len(matches) == 1 and not is_vacancy else None,
+            start=interval[0] if interval else None,
+            end=interval[1] if interval else None,
+            normalized_role=role, vacancy=is_vacancy,
+            excluded=duplicate_of is not None and not is_vacancy,
+            notes_present=_has_value(values.get("notes")),
+            match_status=match_status, formula_fields=formula_fields,
+            required_fields_missing=("normalized_role",) if source_position is None and not is_vacancy else (),
+            source_date=_parse_excel_date(values.get("date"), workbook_epoch),
+            swapboard=swapboard,
+            imported_hours=float(supplied_hours) if _is_number(supplied_hours) and supplied_hours >= 0 else None,
+        ))
+        if duplicate_of is not None and not is_vacancy:
+            continue
+        if interval and not 0 < (interval[1] - interval[0]).total_seconds() <= config.maximum_shift_hours * 3600:
+            interval = None  # retain invalid ranges for review, never core shifts
         if is_vacancy:
             vacancies.append(
                 VacancyRecord(
@@ -336,10 +370,6 @@ def _import_rows(
                 )
             )
 
-        swapboard = _parse_swapboard(values.get("swapboard"), source_row, issues)
-        _validate_hours(
-            values.get("hours"), interval, source_row, config, issues
-        )
         shift_records.append(
             ShiftImportRecord(
                 shift=EmployeeShift(
@@ -360,6 +390,7 @@ def _import_rows(
         shift_records=tuple(shift_records),
         vacancies=tuple(vacancies),
         issues=tuple(issues),
+        review_rows=tuple(review_rows),
     )
 
 
@@ -371,6 +402,8 @@ def _parse_interval(
     source_row: int,
     config: TeamWorkImportConfig,
     issues: list[ImportIssue],
+    *,
+    retain_invalid_range: bool = False,
 ) -> tuple[datetime, datetime] | None:
     parsed_date = _parse_excel_date(date_value, workbook_epoch)
     start_time = _parse_excel_time(start_value, workbook_epoch)
@@ -408,7 +441,7 @@ def _parse_interval(
                 source_row=source_row,
             )
         )
-        return None
+        return (start, end) if retain_invalid_range else None
     if duration_hours > config.maximum_shift_hours:
         issues.append(
             ImportIssue(
@@ -418,11 +451,16 @@ def _parse_interval(
                 source_row=source_row,
             )
         )
-        return None
+        return (start, end) if retain_invalid_range else None
     return start, end
 
 
 def _parse_excel_date(value: object, workbook_epoch: datetime) -> date | None:
+    if isinstance(value, str):
+        try:
+            return date.fromisoformat(value.strip())
+        except ValueError:
+            return None
     if isinstance(value, datetime):
         return value.date()
     if isinstance(value, date):
@@ -440,6 +478,12 @@ def _parse_excel_date(value: object, workbook_epoch: datetime) -> date | None:
 
 
 def _parse_excel_time(value: object, workbook_epoch: datetime) -> time | None:
+    if isinstance(value, str):
+        try:
+            parsed = time.fromisoformat(value.strip())
+            return parsed if parsed.tzinfo is None else None
+        except ValueError:
+            return None
     if isinstance(value, datetime):
         return value.time().replace(tzinfo=None)
     if isinstance(value, time):
@@ -592,3 +636,8 @@ def _is_number(value: object) -> bool:
         and not isinstance(value, bool)
         and isfinite(value)
     )
+
+
+def _safe_cell_values(cells) -> tuple[object, ...]:
+    """Formula text and formula objects never enter parsed data or messages."""
+    return tuple("=" if cell.data_type == "f" else cell.value for cell in cells)

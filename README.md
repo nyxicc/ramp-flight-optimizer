@@ -13,6 +13,10 @@ lexicographic objective hierarchy rather than one blended score.
 
 Phase 1—the standalone optimization engine—is complete. Phase 2 Milestones 16 and
 17 add a versioned FastAPI adapter and immutable SQLite development persistence.
+Milestone 18A adds [reviewed TeamWork employee-schedule imports](docs/IMPORTS.md):
+bounded XLSX upload, persisted previews, explicit corrections, and revision-checked
+confirmation into an immutable employee-only snapshot. Flight-log parsing awaits
+the real format and a sanitized fictional fixture in Milestone 18B.
 The repository still has no web UI, background jobs, authentication, deployment,
 OCR, schedule-image parsing, or live airline data.
 
@@ -246,22 +250,22 @@ runs and is documentation—not a machine-independent performance gate.
 
 ## Limitations and non-goals
 
-- API inputs are structured JSON; workbook input remains a separate constrained
-  Phase 1 adapter rather than a live operational feed.
+- API inputs support structured JSON and reviewed TeamWork `.xlsx` employee
+  schedules. Real flight-log parsing and live operational feeds are deferred.
 - Synthetic workload multipliers are explainable defaults, not empirically
   calibrated labor standards.
 - The engine proposes assignments; a qualified supervisor remains responsible
   for operational review and intervention.
 - Runtime varies with hardware, dependency versions, scenario complexity, and
   solve budget.
-- The API runs optimization synchronously and has no persistence, jobs, polling,
+- The API provides immutable persistence and runs optimization synchronously; it has no jobs, polling,
   cancellation workflow, authentication, React UI, deployment layer, OCR,
   telemetry, or live-data network calls.
 
 ## Phase 2 direction
 
 Later Phase 2 milestones may place a non-technical UI and job execution around
-the stable structured models, add persistence and authenticated workflows, and
+the stable structured models, add authenticated workflows, and
 connect approved data sources. Those additions should preserve the engine’s pure
 layering, explicit warnings, deterministic sample mode, and solver/readiness
 distinction rather than moving business rules into integration code.

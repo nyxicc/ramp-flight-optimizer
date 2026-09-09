@@ -340,6 +340,8 @@ class OperationalDaySummaryResponse(ApiModel):
     shift_count: int
     flight_count: int
     fixed_assignment_count: int
+    optimization_eligible: bool = True
+    optimization_blockers: tuple[str, ...] = ()
 
 
 class OperationalDayResourceResponse(OperationalDaySummaryResponse):

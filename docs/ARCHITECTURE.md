@@ -115,7 +115,21 @@ the caller supplies a destination.
 
 ## Extension boundary
 
+Milestone 18A adds `ramp_optimizer_imports`: frozen review records, closed lifecycle
+states, bounded upload/container checks, deterministic revalidation and correction,
+and adapter/repository protocols. The FastAPI import routes depend on this service;
+the SQLAlchemy import repository implements its transactional persistence boundary.
+The TeamWork adapter reuses the existing low-level parser. Confirmation calls domain
+validation and the existing operational-day repository in the same transaction as
+the unique import linkage. No import operation invokes the optimizer. Preview
+retrieval reads canonical stored JSON, and corrections append immutable revisions.
+
+See [IMPORTS.md](IMPORTS.md) for the dependency diagram and contracts. Milestone 18B
+can add a format-specific flight review adapter only after structural inspection of
+a real sample and construction of a sanitized fictional fixture. This milestone
+defines no flight-log schema, columns, or parser.
+
 The API depends on public models and functions and does not duplicate timing,
-eligibility, readiness, classification, or reporting policy. Future persistence,
+eligibility, readiness, classification, or reporting policy. Future storage adapters,
 job execution, and UI clients can depend on the versioned HTTP contract. The
 library and CLI remain executable without importing API infrastructure.

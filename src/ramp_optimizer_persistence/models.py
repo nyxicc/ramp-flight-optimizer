@@ -4,6 +4,7 @@ from datetime import date
 
 from sqlalchemy import (
     Boolean,
+    CheckConstraint,
     Date,
     Float,
     ForeignKey,
@@ -18,6 +19,47 @@ from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 class Base(DeclarativeBase):
     pass
+
+
+class ImportJobRow(Base):
+    __tablename__ = "import_jobs"
+    __table_args__ = (
+        CheckConstraint("status IN ('REVIEW_REQUIRED','READY_TO_CONFIRM','REJECTED','CONFIRMED')", name="ck_import_status"),
+        CheckConstraint("import_type = 'TEAMWORK_EMPLOYEE_SCHEDULE'", name="ck_import_type"),
+        CheckConstraint("revision >= 1", name="ck_import_revision"),
+        CheckConstraint("(status = 'CONFIRMED' AND confirmed_operational_day_id IS NOT NULL AND confirmed_at IS NOT NULL) OR (status != 'CONFIRMED' AND confirmed_operational_day_id IS NULL AND confirmed_at IS NULL)", name="ck_import_confirmation"),
+        Index("ix_import_jobs_sha256", "sha256"),
+        Index("ix_import_jobs_error_count", "error_count"),
+    )
+    import_id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    import_type: Mapped[str] = mapped_column(String(64))
+    status: Mapped[str] = mapped_column(String(32))
+    original_filename: Mapped[str] = mapped_column(String(255))
+    media_type: Mapped[str] = mapped_column(String(128))
+    byte_size: Mapped[int] = mapped_column(Integer)
+    sha256: Mapped[str] = mapped_column(String(64))
+    schema_version: Mapped[int] = mapped_column(Integer)
+    created_at: Mapped[str] = mapped_column(String(32))
+    updated_at: Mapped[str] = mapped_column(String(32))
+    confirmed_at: Mapped[str | None] = mapped_column(String(32))
+    confirmed_operational_day_id: Mapped[str | None] = mapped_column(ForeignKey("operational_days.id", ondelete="RESTRICT"), unique=True)
+    revision: Mapped[int] = mapped_column(Integer)
+    fatal_count: Mapped[int] = mapped_column(Integer)
+    error_count: Mapped[int] = mapped_column(Integer)
+    warning_count: Mapped[int] = mapped_column(Integer)
+    accepted_shift_count: Mapped[int] = mapped_column(Integer)
+    vacancy_count: Mapped[int] = mapped_column(Integer)
+    unresolved_row_count: Mapped[int] = mapped_column(Integer)
+
+
+class ImportRevisionRow(Base):
+    __tablename__ = "import_revisions"
+    __table_args__ = (CheckConstraint("revision >= 1", name="ck_review_revision"),)
+    import_id: Mapped[str] = mapped_column(ForeignKey("import_jobs.import_id", ondelete="CASCADE"), primary_key=True)
+    revision: Mapped[int] = mapped_column(Integer, primary_key=True)
+    created_at: Mapped[str] = mapped_column(String(32))
+    preview_json: Mapped[str] = mapped_column(Text)
+    preview_hash: Mapped[str] = mapped_column(String(64))
 
 
 class OperationalDayRow(Base):

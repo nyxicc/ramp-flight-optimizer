@@ -18,8 +18,9 @@ bounded XLSX upload, persisted previews, explicit corrections, and revision-chec
 confirmation into an immutable employee-only snapshot. Milestone 18B adds
 [reviewed daily flight logs](docs/FLIGHT_IMPORTS.md), flight corrections, and
 composition of both confirmed inputs into a new operational-day snapshot.
-The repository still has no web UI, background jobs, authentication, deployment,
-OCR, schedule-image parsing, or live airline data.
+Milestone 21 adds a [React supervisor dashboard](docs/SUPERVISOR_DASHBOARD.md)
+for reviewed inputs and background optimization jobs. Authentication, deployment,
+OCR, schedule-image parsing, and live airline data remain outside the current scope.
 
 ## Capabilities
 
@@ -261,9 +262,9 @@ runs and is documentation—not a machine-independent performance gate.
   for operational review and intervention.
 - Runtime varies with hardware, dependency versions, scenario complexity, and
   solve budget.
-- The API provides immutable persistence and runs optimization synchronously; it has no jobs, polling,
-  cancellation workflow, authentication, React UI, deployment layer, OCR,
-  telemetry, or live-data network calls.
+- The API provides immutable persistence and background optimization jobs with
+  polling and cancellation. The React supervisor UI is a local prototype without
+  authentication, deployment, OCR, telemetry, or live-data network calls.
 
 ## Phase 2 direction
 
@@ -288,3 +289,9 @@ partial checkpoints, diagnostics, exact input provenance and configuration.
 Migration `20260910_0005` adds the queue and idempotency records without changing
 earlier history. See [background jobs](docs/BACKGROUND_JOBS.md)
 and the [verification record](docs/BACKGROUND_JOBS_VALIDATION.md).
+
+## Milestone 21 — Supervisor dashboard
+
+A compact React operations workspace now supports operating dates, reviewed
+imports, workforce and flight tables, manual input revisions, background-job
+tracking and operational-readiness review. See [dashboard setup and workflow](docs/SUPERVISOR_DASHBOARD.md).

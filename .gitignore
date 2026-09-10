@@ -12,4 +12,10 @@ ramp_optimizer.db-shm
 build/
 dist/
 *.egg-info/
+node_modules/
+frontend/dist/
+*.tsbuildinfo
+.sites-runtime/
+frontend/openapi.json
+frontend/.local-demo/
 

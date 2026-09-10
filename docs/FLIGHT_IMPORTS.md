@@ -27,8 +27,9 @@ Hidden data, if supplied in a future workbook, is read as data rather than omitt
 Each main-section row represents one turn when both directional sides exist.
 Arrival-only and departure-only rows are supported; a partially populated side
 requires its missing number/time to be corrected. No matching across rows occurs.
-Below a `LATE ARRIVALS` divider, a row without a departure number is arrival-only.
-An accompanying ETD is ignored with `ONWARD_TIME_IGNORED`; no onward flight number
+Below a `LATE ARRIVALS` divider or when explicitly marked terminating, a row
+without a departure number is arrival-only. An accompanying onward ETD is ignored
+without a warning; no onward flight number
 is inferred from a status suffix. A reviewer can explicitly add a departure
 number and timestamp through corrections if that movement belongs in demand.
 
@@ -48,7 +49,8 @@ Explicit datetimes preserve their supplied date and are converted to the airport
 zone. A reversed time-only turn rolls departure forward one calendar day with a
 warning. Equal times or explicitly reversed datetimes remain invalid. Explicit
 dates outside the selected or adjacent calendar dates block confirmation.
-The title's MM/DD/YYYY date is checked against the selected date when present.
+Decorative workbook-title dates are ignored. The selected schedule day is the
+single date used to interpret time-only flight rows.
 Changing the operational date creates an audited revision and **does not shift
 any flight timestamp**; timestamp corrections are separate, explicit changes.
 
@@ -76,8 +78,8 @@ metadata around `Flight`; they do not introduce a competing flight model.
 `A/C #` is an identifier, not a supported aircraft-to-heavy mapping. OO, CONF, and
 MST are not interpreted as staffing, aircraft class, or planning times.
 
-No trustworthy heavy indicator is present in this layout. Heavy defaults to false
-with a nonblocking `HEAVY_UNAVAILABLE` warning. An explicit boolean correction
+Heavy defaults to false without a warning. A supervisor must explicitly check
+Heavy to request heavy-flight staffing. An explicit boolean correction
 records the reviewed value. Express, flight type, staffing, and work windows
 always use existing domain logic. Boundary tests call the authoritative classifier
 and verify that equality with the configured Express threshold is not Express.

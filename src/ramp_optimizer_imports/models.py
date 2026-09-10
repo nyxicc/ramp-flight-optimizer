@@ -114,6 +114,8 @@ class ImportAdapter(Protocol):
         operational_date: date,
         roster: tuple[Employee, ...],
         config: OptimizerConfig,
+        *,
+        ramp_agents_only: bool = False,
     ) -> ImportPreview: ...
     def revalidate(self, preview: ImportPreview) -> ImportPreview: ...
     def correct(

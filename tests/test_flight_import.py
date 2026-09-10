@@ -58,14 +58,15 @@ def test_valid_turn_and_round_trip():
         ).flight_type.value
         == "TURN"
     )
-    assert {i.code for i in preview.issues} == {"HEAVY_UNAVAILABLE"}
+    assert not preview.issues
 
 
 def test_operational_date_correction_is_audited_without_shifting_times():
     preview = DailyFlightLogAdapter().parse(
         workbook(), str(uuid4()), date(2032, 6, 14), POLICY, OptimizerConfig()
     )
-    assert not preview.confirmation_eligible
+    assert preview.confirmation_eligible
+    assert all(i.code != "WORKBOOK_DATE_MISMATCH" for i in preview.issues)
     revised = DailyFlightLogAdapter().correct(preview, (), operational_date=DAY)
     assert revised.operational_date == DAY
     assert revised.flight_rows[0].flight == preview.flight_rows[0].flight
@@ -167,6 +168,7 @@ def test_late_arrivals_do_not_invent_departure():
     assert row.flight.departure_time is None
     assert row.onward_time_present
     assert preview.confirmation_eligible
+    assert not preview.issues
 
 
 @pytest.mark.parametrize("onward_value", [0, "=FICTIONAL_ONWARD_FORMULA()"])
@@ -192,6 +194,38 @@ def test_cancellation_and_unknown_status():
         [[101, "ABC", "10:00", None, None, None, None, None, None, None, None, "UNRECOGNIZED"]]
     )
     assert not preview.confirmation_eligible
+
+
+def test_heavy_is_opt_in_without_a_review_warning():
+    preview = parse()
+    assert preview.flight_rows[0].flight.heavy is False
+    assert not preview.issues
+    revised = DailyFlightLogAdapter().correct(preview, (
+        FlightCorrection(preview.flight_rows[0].row_id, (("heavy", True),)),
+    ))
+    assert revised.flight_rows[0].flight.heavy is True
+    assert not revised.issues
+
+
+def test_terminating_onward_time_never_extends_arrival_offload_work():
+    preview = parse([
+        [101, "ABC", "23:00", None, None, None, None, None, "XYZ", "05:00", None, "TERM 102"],
+    ])
+    assert not preview.issues
+    flight = preview.flight_rows[0].flight
+    assert flight.departure_time is None
+    assert flight.departure_flight_number is None
+    facts = derive_flight_operational_facts(flight, preview.config)
+    assert facts.flight_type.value == "ARRIVAL_ONLY"
+    assert (facts.work_end - flight.arrival_time).total_seconds() == 20 * 60
+
+
+def test_aog_is_normal_and_preserves_planned_service():
+    preview = parse([[None, None, None, None, None, None, None, 1134, "XYZ", "06:00", None, "AOG"]])
+    assert preview.confirmation_eligible
+    assert not preview.issues
+    assert preview.flight_rows[0].status.value == "NORMAL"
+    assert preview.flight_rows[0].flight.departure_flight_number == "1134"
 
 
 def test_midnight_and_formula_correction():
@@ -450,9 +484,9 @@ def test_deterministic_preview_order():
     assert [row.source_row for row in first.flight_rows] == [3, 4]
 
 
-def test_aog_requires_explicit_review():
+def test_arrival_aog_is_also_normal():
     preview = parse([[101, "ABC", "10:00", None, None, None, None, None, None, None, None, "AOG"]])
-    assert not preview.confirmation_eligible
+    assert preview.confirmation_eligible
     corrected = DailyFlightLogAdapter().correct(
         preview, (FlightCorrection(preview.flight_rows[0].row_id, (("status", "NORMAL"),)),)
     )

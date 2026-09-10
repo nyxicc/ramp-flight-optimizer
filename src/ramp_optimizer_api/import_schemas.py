@@ -115,7 +115,8 @@ class FlightCorrectionAuditResponse(ApiModel):
 
 class ImportMetadataRequest(ApiModel):
     operational_date: date
-    roster: tuple[EmployeeRequest, ...] = Field(max_length=5000)
+    roster: tuple[EmployeeRequest, ...] = Field(default=(), max_length=5000)
+    ramp_agents_only: StrictBool = False
     config: OptimizerConfigRequest = Field(default_factory=OptimizerConfigRequest)
 
 
@@ -168,6 +169,7 @@ class ReviewRowResponse(ApiModel):
     row_id: UUID
     source_row: int
     employee_id: str | None
+    employee_name: str | None = None
     start: datetime | None
     end: datetime | None
     normalized_role: OperationalRole

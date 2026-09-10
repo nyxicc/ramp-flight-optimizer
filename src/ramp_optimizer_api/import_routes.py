@@ -102,6 +102,9 @@ def import_response(record) -> ImportResponse:
         ],
         "config": json_value(preview.config),
         "role_mappings": preview.import_config.position_role_mappings,
+        "discarded_sensitive_fields": ("notes",)
+        if any(r.values.employee_name for r in rows)
+        else ("notes", "unmatched_employee_names"),
     }
     if record.import_type == ImportType.DAILY_FLIGHT_LOG:
         value["preview"]["optimization_blockers"] = [
@@ -182,6 +185,7 @@ def import_router(service):
                 tuple(employee_to_domain(e) for e in request.roster),
                 config_to_domain(request.config),
                 digest=digest,
+                ramp_agents_only=request.ramp_agents_only,
             )
             return import_response(record)
         finally:

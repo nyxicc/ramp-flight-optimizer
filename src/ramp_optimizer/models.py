@@ -5,15 +5,15 @@ from datetime import date, datetime
 
 from ramp_optimizer.enums import (
     BreakStatus,
-    EmergencyPassDisposition,
-    EmergencyLeadReason,
-    EmergencyStaffingStatus,
     EligibilityReason,
+    EmergencyLeadReason,
+    EmergencyPassDisposition,
+    EmergencyStaffingStatus,
     FlightType,
     IssueSeverity,
+    OperationalReadinessStatus,
     OperationalRole,
     OptimizationStatus,
-    OperationalReadinessStatus,
     Qualification,
     StaffingStatus,
     WarningCode,
@@ -131,7 +131,7 @@ class ImportIssue:
 
 @dataclass(frozen=True, slots=True)
 class ScheduleReviewRow:
-    """Safe parsed values, including unresolved rows; never raw names or notes."""
+    """Parsed review values; workbook names are retained only when explicitly requested."""
 
     source_row: int
     employee_id: str | None
@@ -147,6 +147,7 @@ class ScheduleReviewRow:
     required_fields_missing: tuple[str, ...] = ()
     source_date: date | None = None
     imported_hours: float | None = None
+    employee_name: str | None = None
 
 
 @dataclass(frozen=True, slots=True)

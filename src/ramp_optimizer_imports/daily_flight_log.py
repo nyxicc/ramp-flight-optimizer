@@ -4,7 +4,6 @@ Only normalized planning fields leave this module. Notes, aircraft identifiers,
 auxiliary columns, worksheet names, and unrecognized source text are discarded.
 """
 
-import re
 from dataclasses import replace
 from datetime import date, datetime, timedelta
 from io import BytesIO
@@ -67,15 +66,11 @@ def issue(
 ) -> ReviewIssue:
     messages = {
         "INVALID_FLIGHT_VALUE": "Supply an explicit valid value for this flight field.",
-        "HEAVY_UNAVAILABLE": "No reliable heavy indicator is supplied; non-heavy requires review.",
-        "STATUS_REQUIRES_REVIEW": "Resolve the operational status or exclude this record.",
         "CANCELLED_EXCLUDED": "Cancelled records are excluded from optimization demand.",
-        "ONWARD_TIME_IGNORED": "An onward time without a departure flight is not planning demand.",
         "DUPLICATE_FLIGHT_ROW": "An identical active flight row must be explicitly excluded.",
         "FLIGHT_DOMAIN_VALIDATION": "The flight does not satisfy the optimizer flight rules.",
         "FLIGHT_DATE_OUTSIDE_WINDOW": "Use a date within the selected operational day or an adjacent calendar date.",
         "FORMULA_VALUE_UNAVAILABLE": "Replace the formula with an explicit reviewed planning value.",
-        "WORKBOOK_DATE_MISMATCH": "The workbook title date differs from the selected operational date.",
         "EMPTY_FLIGHT_LOG": "At least one source flight record is required.",
         "MIDNIGHT_ROLLOVER": "The time-only departure rolls into the following calendar day.",
     }
@@ -102,7 +97,7 @@ def snapshot(preview: ImportPreview) -> OperationalDay:
 
 
 def revalidate(preview: ImportPreview) -> ImportPreview:
-    issues = list(preview.source_issues)
+    issues = [i for i in preview.source_issues if i.code != "WORKBOOK_DATE_MISMATCH"]
     active = []
     seen = set()
     if not preview.flight_rows:
@@ -122,15 +117,26 @@ def revalidate(preview: ImportPreview) -> ImportPreview:
                 for suffix in ("_flight_number", "_time"):
                     if getattr(row.flight, side + suffix) is None:
                         issues.append(issue("INVALID_FLIGHT_VALUE", row.source_row, side + suffix))
-        if row.status in {FlightStatus.AOG, FlightStatus.UNKNOWN} or (
+        if row.status == FlightStatus.UNKNOWN or (
             row.status == FlightStatus.TERMINATING and row.departure_expected
         ):
-            issues.append(issue("STATUS_REQUIRES_REVIEW", row.source_row, "status"))
-        if not row.heavy_reviewed:
-            issues.append(issue("HEAVY_UNAVAILABLE", row.source_row, "heavy", warning=True))
-        if row.onward_time_present:
+            label = " / ".join(
+                filter(None, (row.flight.arrival_flight_number, row.flight.departure_flight_number))
+            )
+            reason = {
+                FlightStatus.UNKNOWN: "The workbook status is not recognized. Choose Normal if this flight should be staffed, Terminating for an arrival-only movement, or exclude it if no service is required.",
+                FlightStatus.TERMINATING: "The workbook marks this flight as terminating, but also supplies a departure flight. Confirm whether it is a turn or an arrival-only movement before including it.",
+            }[row.status]
             issues.append(
-                issue("ONWARD_TIME_IGNORED", row.source_row, "departure_time", warning=True)
+                ReviewIssue(
+                    "STATUS_REQUIRES_REVIEW",
+                    IssueSeverity.ERROR,
+                    f"Flight {label}: {reason}",
+                    row.source_row,
+                    "status",
+                    True,
+                    "Use Correct to review the flight status and planned movement.",
+                )
             )
         for field in ("arrival_time", "departure_time"):
             value = getattr(row.flight, field)
@@ -190,21 +196,11 @@ class DailyFlightLogAdapter:
                 sheet, header = candidates[0]
                 rows = []
                 issues = []
-                detected_date = None
                 late = False
                 for index, cells in enumerate(sheet.iter_rows(), 1):
                     values = [c.value for c in cells]
                     values += [None] * max(0, 13 - len(values))
                     if index < header:
-                        for value in values:
-                            for match in re.finditer(
-                                r"\b(\d{1,2}/\d{1,2}/\d{4})\b", str(value or "")
-                            ):
-                                month, day, year = map(int, match.group(1).split("/"))
-                                candidate_date = date(year, month, day)
-                                if detected_date is not None and detected_date != candidate_date:
-                                    raise ImportError("AMBIGUOUS_WORKBOOK_DATE")
-                                detected_date = candidate_date
                         continue
                     if index == header or not any(v not in (None, "") for v in values):
                         continue
@@ -233,8 +229,6 @@ class DailyFlightLogAdapter:
                         issues.append(
                             issue("MIDNIGHT_ROLLOVER", index, "departure_time", warning=True)
                         )
-                if detected_date is not None and detected_date != operational_date:
-                    issues.append(issue("WORKBOOK_DATE_MISMATCH", field="operational_date"))
                 preview = ImportPreview(
                     1,
                     operational_date,
@@ -247,7 +241,6 @@ class DailyFlightLogAdapter:
                     TeamWorkImportConfig(),
                     flight_rows=tuple(rows),
                     flight_policy=policy,
-                    detected_date=detected_date,
                 )
                 return revalidate(preview)
             finally:
@@ -364,8 +357,9 @@ def _row(values, cells, index, import_id, day, policy, epoch, late):
     ]
     arrival_expected = any(values[c] not in (None, "") for c in (0, 1, 2))
     departure_expected = any(values[c] not in (None, "") for c in (7, 8, 9))
-    onward = late and values[7] in (None, "") and values[9] not in (None, "")
-    if late and values[7] in (None, ""):
+    arrival_only = late or operational_status(clean[11]) == FlightStatus.TERMINATING
+    onward = arrival_only and values[7] in (None, "") and values[9] not in (None, "")
+    if arrival_only and values[7] in (None, ""):
         departure_expected = False
         formula = tuple(
             field for field in formula if field not in {"departure_time", "destination"}

@@ -35,6 +35,8 @@ def import_teamwork_schedule(
     workbook_path: str | PathLike[str] | BinaryIO,
     roster: Iterable[Employee],
     config: TeamWorkImportConfig | None = None,
+    *,
+    retain_employee_names: bool = False,
 ) -> ScheduleImportResult:
     """Import valid schedule rows while collecting structural and row issues."""
 
@@ -97,6 +99,7 @@ def import_teamwork_schedule(
             roster=tuple(roster),
             config=active_config,
             workbook_epoch=workbook.epoch,
+            retain_employee_names=retain_employee_names,
         )
     except Exception:  # lazy worksheet parsing can also fail
         return ScheduleImportResult(issues=(ImportIssue(
@@ -221,6 +224,7 @@ def _import_rows(
     roster: tuple[Employee, ...],
     config: TeamWorkImportConfig,
     workbook_epoch: datetime,
+    retain_employee_names: bool = False,
 ) -> ScheduleImportResult:
     issues: list[ImportIssue] = []
     shift_records: list[ShiftImportRecord] = []
@@ -291,6 +295,7 @@ def _import_rows(
         supplied_hours = values.get("hours")
         review_rows.append(ScheduleReviewRow(
             source_row=source_row,
+            employee_name=str(values.get("employee")).strip() if retain_employee_names and not is_vacancy and employee_name_key else None,
             employee_id=matches[0].employee_id if len(matches) == 1 and not is_vacancy else None,
             start=interval[0] if interval else None,
             end=interval[1] if interval else None,

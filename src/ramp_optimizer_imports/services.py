@@ -57,12 +57,20 @@ class ImportService:
         config: OptimizerConfig,
         *,
         digest: str | None = None,
+        ramp_agents_only: bool = False,
     ) -> ImportRecord:
         filename, media_type = validate_filename(filename, media_type)
         validate_container(content, self.limits)
         validate_or_raise(OperationalDay(operational_date, roster), config)
         import_id = self.id_provider()
-        preview = self.adapter.parse(content, import_id, operational_date, roster, config)
+        preview = self.adapter.parse(
+            content,
+            import_id,
+            operational_date,
+            roster,
+            config,
+            **({"ramp_agents_only": True} if ramp_agents_only else {}),
+        )
         now = self._now()
         record = ImportRecord(
             import_id,
@@ -200,6 +208,16 @@ class ImportService:
             if current.status == ImportStatus.CONFIRMED:
                 return current
             adapter = self._adapter(current)
+            if current.import_type == ImportType.DAILY_FLIGHT_LOG:
+                refreshed = adapter.revalidate(current.preview)
+                if refreshed.issues != current.preview.issues and refreshed.confirmation_eligible:
+                    # Preserve the original review and append the current import-policy
+                    # evaluation before confirming an older saved flight log.
+                    refreshed = replace(refreshed, revision=current.preview.revision + 1)
+                    self._transition(current.status, refreshed.status)
+                    current = replace(current, preview=refreshed, status=refreshed.status,
+                                      updated_at=self._now())
+                    repository.revise(current)
             if (
                 current.status != ImportStatus.READY_TO_CONFIRM
                 or not adapter.revalidate(current.preview).confirmation_eligible

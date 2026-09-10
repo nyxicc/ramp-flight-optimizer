@@ -3,6 +3,21 @@
 This project follows a concise, release-oriented changelog. No formal tagged
 release has been created.
 
+## Unreleased - Phase 2 Milestone 21 — Supervisor dashboard foundation
+
+- Added batch review corrections, a single schedule-day interpretation that ignores
+  workbook title dates, and named Ramp Agent imports without a required JSON roster.
+  New workbook identities start without qualifications; verified roster values are preserved.
+
+- Added a React/TypeScript supervisor workspace for operating-date selection,
+  reviewed imports, flight and workforce tables, operational issues and settings.
+- Connected immutable input revisions and asynchronous optimization admission,
+  polling, cancellation, partial results and per-version job recovery.
+- Added deliberate manual edits, original-value restoration, fixed-assignment
+  markers, result readiness summaries and a server-backed assignment timeline.
+- Added frontend contract types, component/lifecycle tests, CI and local setup
+  documentation. Existing optimizer and backend behavior are unchanged.
+
 ## Unreleased — Phase 2 Milestone 18B
 
 - Add a reviewed daily flight-log adapter using the existing Flight model and domain rules.

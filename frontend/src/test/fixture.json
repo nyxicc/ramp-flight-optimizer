@@ -1,0 +1,348 @@
+{
+  "input": {
+    "operational_day": {
+      "operational_date": "2035-04-15",
+      "employees": [
+        {
+          "employee_id": "S001",
+          "name": "Fictional Agent S001",
+          "qualifications": [],
+          "enabled": true
+        },
+        {
+          "employee_id": "S002",
+          "name": "Fictional Agent S002",
+          "qualifications": [],
+          "enabled": true
+        }
+      ],
+      "employee_shifts": [
+        {
+          "employee_id": "S001",
+          "start": "2035-04-15T07:00:00-05:00",
+          "end": "2035-04-15T11:00:00-05:00",
+          "normalized_role": "RAMP_AGENT"
+        },
+        {
+          "employee_id": "S002",
+          "start": "2035-04-15T07:00:00-05:00",
+          "end": "2035-04-15T11:00:00-05:00",
+          "normalized_role": "RAMP_AGENT"
+        }
+      ],
+      "flights": [
+        {
+          "arrival_flight_number": "SYN151",
+          "arrival_time": "2035-04-15T09:00:00-05:00",
+          "departure_flight_number": null,
+          "departure_time": null,
+          "gate": "S01",
+          "heavy": false
+        }
+      ],
+      "fixed_assignments": []
+    },
+    "config": {
+      "arrival_preparation_minutes": 10,
+      "arrival_offload_minutes": 20,
+      "departure_work_minutes": 60,
+      "minimum_staff": 3,
+      "normal_preferred_staff": 4,
+      "heavy_preferred_staff": 5,
+      "required_break_minutes": 30,
+      "consecutive_reset_minutes": 40,
+      "continuity_horizon_minutes": 120,
+      "express_threshold": 3000,
+      "express_workload_factor": 0.8,
+      "three_person_workload_multiplier": 1.15,
+      "workload_scale": 100,
+      "allow_leads_for_minimum_staffing": false,
+      "allow_trainees_for_assignments": false,
+      "allow_possible_ramp_support_for_assignments": false,
+      "solver_time_limit_seconds": 2.0,
+      "solver_random_seed": 42,
+      "solver_num_search_workers": 1
+    }
+  },
+  "result": {
+    "status": "OPTIMAL",
+    "operational_readiness": "MANUAL_INTERVENTION_REQUIRED",
+    "emergency_staffing_status": "CRITICAL_SHORTAGE_REMAINS",
+    "emergency_pass_disposition": "NOT_ENABLED",
+    "emergency_leads_enabled": false,
+    "emergency_lead_staffing_used": false,
+    "solver_runtime_seconds": 0.0930000000007567,
+    "schedule_summary": {
+      "total_flights": 1,
+      "minimum_staffed_flights": 0,
+      "below_minimum_flights": 1,
+      "preferred_staffed_flights": 0,
+      "qualification_required_flights": 0,
+      "qualification_compliant_flights": 0,
+      "missing_push_flights": 0,
+      "missing_close_out_flights": 0,
+      "participating_employee_count": 2,
+      "employees_with_satisfied_break": 0,
+      "employees_with_unsatisfied_break": 0,
+      "employees_with_nonevaluable_break": 2,
+      "total_assignments": 2,
+      "emergency_lead_assignments": 0,
+      "critical_warning_count": 2,
+      "warning_count": 2,
+      "all_objectives_proven_optimal": true
+    },
+    "flight_results": [
+      {
+        "flight": {
+          "arrival_flight_number": "SYN151",
+          "arrival_time": "2035-04-15T09:00:00-05:00",
+          "departure_flight_number": null,
+          "departure_time": null,
+          "gate": "S01",
+          "heavy": false
+        },
+        "flight_type": "ARRIVAL_ONLY",
+        "work_start": "2035-04-15T08:50:00-05:00",
+        "work_end": "2035-04-15T09:20:00-05:00",
+        "assigned_employee_ids": [
+          "S001",
+          "S002"
+        ],
+        "fixed_employee_ids": [],
+        "staffing_count": 2,
+        "minimum_staff": 3,
+        "preferred_staff": 4,
+        "maximum_staff": 4,
+        "staffing_status": "BELOW_MINIMUM",
+        "minimum_met": false,
+        "minimum_shortfall": 1,
+        "preferred_met": false,
+        "preferred_shortfall": 2,
+        "express": false,
+        "heavy": false,
+        "push_covered": null,
+        "close_covered": null,
+        "warnings": [
+          {
+            "code": "MINIMUM_STAFFING_NOT_MET",
+            "severity": "CRITICAL",
+            "message": "Flight is below minimum staffing by 1",
+            "arrival_flight_number": "SYN151",
+            "departure_flight_number": null,
+            "employee_id": null
+          }
+        ]
+      }
+    ],
+    "employee_results": [
+      {
+        "employee_id": "S001",
+        "assigned_flights": [
+          {
+            "arrival_flight_number": "SYN151",
+            "arrival_time": "2035-04-15T09:00:00-05:00",
+            "departure_flight_number": null,
+            "departure_time": null,
+            "gate": "S01",
+            "heavy": false
+          }
+        ],
+        "flight_count": 1,
+        "mainline_flight_count": 1,
+        "express_flight_count": 0,
+        "three_person_flight_count": 0,
+        "longest_consecutive_streak": 1,
+        "break_status": "NOT_EVALUABLE_BETWEEN_ASSIGNMENTS",
+        "adjusted_workload": 1.0,
+        "scheduled_shift_minutes": 240,
+        "proportional_target_flight_count": 1.0,
+        "shift_adjusted_deviation": 0.0
+      },
+      {
+        "employee_id": "S002",
+        "assigned_flights": [
+          {
+            "arrival_flight_number": "SYN151",
+            "arrival_time": "2035-04-15T09:00:00-05:00",
+            "departure_flight_number": null,
+            "departure_time": null,
+            "gate": "S01",
+            "heavy": false
+          }
+        ],
+        "flight_count": 1,
+        "mainline_flight_count": 1,
+        "express_flight_count": 0,
+        "three_person_flight_count": 0,
+        "longest_consecutive_streak": 1,
+        "break_status": "NOT_EVALUABLE_BETWEEN_ASSIGNMENTS",
+        "adjusted_workload": 1.0,
+        "scheduled_shift_minutes": 240,
+        "proportional_target_flight_count": 1.0,
+        "shift_adjusted_deviation": 0.0
+      }
+    ],
+    "fairness_metrics": {
+      "participating_employee_count": 2,
+      "total_assignments": 2,
+      "average_flights": 1.0,
+      "highest_flight_count": 1,
+      "lowest_flight_count": 1,
+      "flight_count_spread": 0,
+      "maximum_consecutive_streak": 1,
+      "adjusted_workload_spread": 0.0,
+      "total_participating_shift_minutes": 480,
+      "total_shift_adjusted_deviation": 0.0
+    },
+    "continuity_metrics": {
+      "eligible_transition_count": 0,
+      "total_retained_employee_transitions": 0,
+      "average_retained_employees_per_transition": 0.0,
+      "strongest_retention_count": 0,
+      "strongest_transition": null,
+      "transitions": []
+    },
+    "attempts": [
+      {
+        "included_leads": false,
+        "status": "OPTIMAL",
+        "minimum_staffed_flights": 0,
+        "qualification_compliant_flights": 0,
+        "lead_assignments": 0,
+        "critical_shortage_count": 1,
+        "lead_candidate_count": 0,
+        "solver_runtime_seconds": 0.0930000000007567,
+        "pass_number": 1,
+        "attempt_label": "RAMP_AGENT_ONLY",
+        "usable_schedule": true,
+        "selected_as_final": true,
+        "known_unsatisfied_required_break_count": 0,
+        "objective_stages_completed": 17,
+        "all_objectives_proven_optimal": true
+      }
+    ],
+    "objective_values": [
+      {
+        "stage": 1,
+        "name": "minimum_covered_flights",
+        "value": 0,
+        "proven_optimal": true
+      },
+      {
+        "stage": 2,
+        "name": "minimum_staffed_qualification_compliant_flights",
+        "value": 0,
+        "proven_optimal": true
+      },
+      {
+        "stage": 3,
+        "name": "minimum_staffed_individual_qualification_coverage",
+        "value": 0,
+        "proven_optimal": true
+      },
+      {
+        "stage": 4,
+        "name": "total_minimum_shortfall",
+        "value": 1,
+        "proven_optimal": true
+      },
+      {
+        "stage": 5,
+        "name": "largest_minimum_shortfall",
+        "value": 1,
+        "proven_optimal": true
+      },
+      {
+        "stage": 6,
+        "name": "known_unsatisfied_required_breaks",
+        "value": 0,
+        "proven_optimal": true
+      },
+      {
+        "stage": 7,
+        "name": "preferred_staffed_flights",
+        "value": 0,
+        "proven_optimal": true
+      },
+      {
+        "stage": 8,
+        "name": "total_preferred_shortfall",
+        "value": 2,
+        "proven_optimal": true
+      },
+      {
+        "stage": 9,
+        "name": "partial_crew_individual_qualification_coverage",
+        "value": 0,
+        "proven_optimal": true
+      },
+      {
+        "stage": 10,
+        "name": "raw_flight_count_spread",
+        "value": 0,
+        "proven_optimal": true
+      },
+      {
+        "stage": 11,
+        "name": "total_pairwise_flight_count_difference",
+        "value": 0,
+        "proven_optimal": true
+      },
+      {
+        "stage": 12,
+        "name": "maximum_consecutive_flight_streak",
+        "value": 1,
+        "proven_optimal": true
+      },
+      {
+        "stage": 13,
+        "name": "total_employee_longest_streaks",
+        "value": 2,
+        "proven_optimal": true
+      },
+      {
+        "stage": 14,
+        "name": "total_shift_adjusted_flight_count_deviation",
+        "value": 0,
+        "proven_optimal": true
+      },
+      {
+        "stage": 15,
+        "name": "adjusted_workload_spread",
+        "value": 0,
+        "proven_optimal": true
+      },
+      {
+        "stage": 16,
+        "name": "total_pairwise_adjusted_workload_difference",
+        "value": 0,
+        "proven_optimal": true
+      },
+      {
+        "stage": 17,
+        "name": "total_continuity_retention",
+        "value": 0,
+        "proven_optimal": true
+      }
+    ],
+    "warnings": [
+      {
+        "code": "MINIMUM_STAFFING_NOT_MET",
+        "severity": "CRITICAL",
+        "message": "Flight is below minimum staffing by 1",
+        "arrival_flight_number": "SYN151",
+        "departure_flight_number": null,
+        "employee_id": null
+      },
+      {
+        "code": "MANUAL_INTERVENTION_REQUIRED",
+        "severity": "CRITICAL",
+        "message": "SYN151 requires manual intervention: minimum staffing.",
+        "arrival_flight_number": "SYN151",
+        "departure_flight_number": null,
+        "employee_id": null
+      }
+    ],
+    "lead_assignments": []
+  }
+}

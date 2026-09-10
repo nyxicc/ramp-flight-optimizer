@@ -3,12 +3,12 @@
 from dataclasses import replace
 from datetime import date, datetime
 from io import BytesIO
-from uuid import UUID, uuid5
+from uuid import NAMESPACE_URL, UUID, uuid5
 
 from ramp_optimizer.config import OptimizerConfig, TeamWorkImportConfig
 from ramp_optimizer.enums import IssueSeverity, OperationalRole, Qualification
 from ramp_optimizer.models import Employee, EmployeeShift, OperationalDay
-from ramp_optimizer.teamwork_import import import_teamwork_schedule
+from ramp_optimizer.teamwork_import import import_teamwork_schedule, normalize_identity_name
 from ramp_optimizer.validation import validate_config, validate_operational_day
 from ramp_optimizer_imports.enums import ImportType
 from ramp_optimizer_imports.models import (
@@ -40,9 +40,55 @@ class TeamWorkAdapter:
         operational_date: date,
         roster: tuple[Employee, ...],
         config: OptimizerConfig,
+        *,
+        ramp_agents_only: bool = False,
     ) -> ImportPreview:
         settings = TeamWorkImportConfig()
-        parsed = import_teamwork_schedule(BytesIO(content), roster, settings)
+        parsed = import_teamwork_schedule(
+            BytesIO(content), roster, settings, retain_employee_names=ramp_agents_only
+        )
+        if ramp_agents_only:
+            # Workbook names establish identity, never qualifications. Preserve approved
+            # roster matches and leave ambiguous matches for explicit review.
+            employees = {e.employee_id: e for e in roster}
+            rows = []
+            for row in parsed.review_rows:
+                if row.normalized_role != OperationalRole.RAMP_AGENT or row.vacancy:
+                    continue
+                if (
+                    row.employee_name
+                    and row.match_status == "UNMATCHED_EMPLOYEE"
+                    and "employee" not in row.formula_fields
+                ):
+                    employee_id = "workbook-" + str(
+                        uuid5(
+                            NAMESPACE_URL,
+                            "ramp-employee:" + (normalize_identity_name(row.employee_name) or ""),
+                        )
+                    )
+                    employees.setdefault(employee_id, Employee(employee_id, row.employee_name))
+                    row = replace(row, employee_id=employee_id, match_status="MATCHED")
+                rows.append(row)
+            used = {r.employee_id for r in rows}
+            # Retain potential matches for ambiguous names so the review can resolve them.
+            ambiguous = {
+                normalize_identity_name(r.employee_name)
+                for r in rows
+                if r.match_status == "AMBIGUOUS_EMPLOYEE"
+            }
+            roster = tuple(
+                e
+                for e in employees.values()
+                if e.employee_id in used or normalize_identity_name(e.name) in ambiguous
+            )
+            source_rows = {r.source_row for r in rows}
+            parsed = replace(
+                parsed,
+                review_rows=tuple(rows),
+                issues=tuple(
+                    i for i in parsed.issues if i.source_row is None or i.source_row in source_rows
+                ),
+            )
         source = tuple(
             ReviewIssue(
                 i.code,
@@ -69,6 +115,18 @@ class TeamWorkAdapter:
             config,
             settings,
         )
+        if ramp_agents_only and not preview.rows:
+            preview = replace(
+                preview,
+                source_issues=preview.source_issues
+                + (
+                    ReviewIssue(
+                        "RAMP_AGENTS_REQUIRED",
+                        IssueSeverity.FATAL,
+                        "No occupied Ramp Agent shifts were found in this workbook.",
+                    ),
+                ),
+            )
         return revalidate(preview)
 
 

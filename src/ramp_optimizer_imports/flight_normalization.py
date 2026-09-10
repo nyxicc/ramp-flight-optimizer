@@ -53,7 +53,7 @@ def operational_status(value: object) -> FlightStatus:
     if re.fullmatch(r"TERM(?: \d+)?", text):
         return FlightStatus.TERMINATING
     if text == "AOG":
-        return FlightStatus.AOG
+        return FlightStatus.NORMAL
     if text in {"CANCELLED", "CANCELED", "CXL"}:
         return FlightStatus.CANCELLED
     return FlightStatus.UNKNOWN

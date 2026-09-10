@@ -13,9 +13,10 @@ Client
     -> versioned FastAPI adapter
     -> application persistence service
     -> SQLAlchemy repositories / SQLite
-    -> Phase 1 application mapping
-    -> existing optimizer engine
-    -> structured API response
+    -> durable optimization job (HTTP 202)
+
+Local worker -> atomic claim -> child process -> existing optimizer engine
+             -> checkpoint / immutable run -> job status and result GET
 ```
 
 The core execution path remains:
@@ -137,3 +138,19 @@ The API depends on public models and functions and does not duplicate timing,
 eligibility, readiness, classification, or reporting policy. Future storage adapters,
 job execution, and UI clients can depend on the versioned HTTP contract. The
 library and CLI remain executable without importing API infrastructure.
+
+## Milestone 19 — Input-management API
+
+Validated immutable operational-day drafts and complete-snapshot revisions are
+available under `/api/v1`, with optimistic concurrency, idempotency, and preserved
+lineage. Apply migration `20260910_0004`. See the [workflow, routes, validation and
+persistence contract](INPUT_MANAGEMENT.md) and [verification record](INPUT_MANAGEMENT_VALIDATION.md).
+
+## Milestone 20 — Background optimization jobs
+
+Optimization POST routes now return HTTP 202 jobs. A separately launched local
+worker claims durable work and supervises a killable solver process, retaining
+partial checkpoints, diagnostics, exact input provenance and configuration.
+Migration `20260910_0005` adds the queue and idempotency records without changing
+earlier history. See [background jobs](BACKGROUND_JOBS.md)
+and the [verification record](BACKGROUND_JOBS_VALIDATION.md).

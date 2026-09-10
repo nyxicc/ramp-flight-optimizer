@@ -5,7 +5,7 @@ Reviewed flight uploads, revision history, and input composition are documented 
 
 Phase 2 Milestones 16 and 17 expose the completed Phase 1 optimizer through a small
 FastAPI adapter with optional durable snapshots. The adapter parses structured JSON, maps it to the existing frozen
-domain records, runs the existing validation and optimizer functions synchronously,
+domain records, runs validation synchronously and queues optimizer execution,
 and explicitly maps the complete public result back to JSON. It contains no
 scheduling, classification, eligibility, readiness, warning, or report policy.
 
@@ -35,11 +35,11 @@ request, or data-file write.
 | `GET` | `/api/v1/health` | Returns `{"status":"ok"}` without invoking the optimizer or external services. |
 | `GET` | `/api/v1/version` | Returns API version `1` and the installed project version from package metadata. |
 | `POST` | `/api/v1/operational-days/validate` | Maps and validates a request, returning all domain and flight-reference issues as an HTTP `200` validation result. |
-| `POST` | `/api/v1/optimizations` | Validates, runs the optimizer synchronously, and returns the complete structured result. |
+| `POST` | `/api/v1/optimizations` | Validates and queues a background optimization job; returns `202`. |
 | `POST` | `/api/v1/operational-days` | Validates and creates an immutable snapshot; returns `201`. |
 | `GET` | `/api/v1/operational-days` | Lists summaries newest first; `limit` defaults to 20 and is capped at 100. |
 | `GET` | `/api/v1/operational-days/{id}` | Returns metadata and the complete resolved input. |
-| `POST` | `/api/v1/operational-days/{id}/optimizations` | Optimizes a verified snapshot, stores the complete result, and returns `201`. |
+| `POST` | `/api/v1/operational-days/{id}/optimizations` | Queues a verified snapshot for a local worker; returns `202`. |
 | `GET` | `/api/v1/operational-days/{id}/optimization-runs` | Lists stored run summaries. |
 | `GET` | `/api/v1/optimization-runs/{id}` | Returns stored run metadata and complete immutable result without rerunning. |
 
@@ -119,8 +119,8 @@ invalid dates, datetimes, enum values, or types return HTTP `422`.
 
 `config` and each of its fields may be omitted. All 19 `OptimizerConfig` fields
 are exposed, and omitted values come from the domain dataclass rather than a
-separate API policy table. The synchronous endpoint rejects a solver time limit
-above 60 seconds instead of silently clamping it. The domain still validates that
+separate API policy table. Background jobs use a separate wall-clock deadline;
+the former 60-second synchronous HTTP limit no longer applies. The domain validates that
 the submitted value is positive, finite, and otherwise internally consistent.
 
 Employee qualifications are `PUSH` and `CLOSE_OUT`. Operational shift roles are
@@ -188,14 +188,14 @@ error returns the error envelope below with HTTP `422`.
 ## Optimization behavior
 
 The optimization route maps the request, calls the existing `validate_or_raise`,
-enforces the separate 60-second synchronous policy, and calls
-`optimize_flight_assignments`. It returns HTTP `200` for all valid computational
+and returns HTTP `202` with a durable job. A local worker calls
+`optimize_flight_assignments`. The job result endpoint returns HTTP `200` for all valid computational
 and operational results: `OPTIMAL`, `FEASIBLE`, `READY`, `READY_WITH_WARNINGS`,
 `MANUAL_INTERVENTION_REQUIRED`, valid partial schedules, and
 `NO_USABLE_SCHEDULE`. A staffing shortage is an operational result rather than an
 HTTP failure.
 
-A shortened response for the example shortage is:
+A shortened nested `result` for the example shortage is:
 
 ```json
 {
@@ -299,13 +299,20 @@ inside successful optimization results.
 
 ## Deliberate limitations
 
-The API executes CPU-bound optimization in a normal synchronous route. Milestones
-17 and 18A provide explicit persistent snapshots and reviewed imports. There is no
-job queue, cancellation workflow, WebSocket, or artificial queued state. Submitted
+Milestone 20 executes CPU-bound optimization in a local worker child process.
+See [background jobs](BACKGROUND_JOBS.md) for submission, polling, progress,
+cancellation, timeouts, results and worker startup. There is no WebSocket. Submitted
 workbook bytes are not retained after bounded parsing; reviewed values persist.
 Operational payloads are not logged, and the API makes no network calls.
 
 This is a localhost development API. It has no authentication or authorization
 and does not enable permissive CORS. Production authentication, authorization,
-background execution, deployment controls, and production storage belong to later
+deployment controls, and production storage belong to later
 milestones.
+
+## Milestone 19 — Input-management API
+
+Validated immutable operational-day drafts and complete-snapshot revisions are
+available under `/api/v1`, with optimistic concurrency, idempotency, and preserved
+lineage. Apply migration `20260910_0004`. See the [workflow, routes, validation and
+persistence contract](INPUT_MANAGEMENT.md) and [verification record](INPUT_MANAGEMENT_VALIDATION.md).

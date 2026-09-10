@@ -61,3 +61,19 @@ Tests verify upgrade from Milestone 17, downgrade, clean upgrade from base, sche
 parity, SQLite foreign keys, uniqueness, and rollback. No migration runs on API
 import. [IMPORTS.md](IMPORTS.md) documents retention, hash/duplicate policy, API
 contracts, and the distinction between confirmable and optimizable input.
+
+## Milestone 19 — Input-management API
+
+Validated immutable operational-day drafts and complete-snapshot revisions are
+available under `/api/v1`, with optimistic concurrency, idempotency, and preserved
+lineage. Apply migration `20260910_0004`. See the [workflow, routes, validation and
+persistence contract](INPUT_MANAGEMENT.md) and [verification record](INPUT_MANAGEMENT_VALIDATION.md).
+
+## Milestone 20 — Background optimization jobs
+
+Optimization POST routes now return HTTP 202 jobs. A separately launched local
+worker claims durable work and supervises a killable solver process, retaining
+partial checkpoints, diagnostics, exact input provenance and configuration.
+Migration `20260910_0005` adds the queue and idempotency records without changing
+earlier history. See [background jobs](BACKGROUND_JOBS.md)
+and the [verification record](BACKGROUND_JOBS_VALIDATION.md).

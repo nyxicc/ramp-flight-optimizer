@@ -1,4 +1,4 @@
-"""FastAPI application boundary for synchronous version 1 optimization."""
+"""FastAPI input management and asynchronous optimization job boundary."""
 
 from datetime import date
 from importlib.metadata import version as distribution_version
@@ -15,19 +15,21 @@ from ramp_optimizer import (
     optimize_flight_assignments,
     validate_config,
     validate_operational_day,
-    validate_or_raise,
 )
 from ramp_optimizer_api.errors import (
     FixedAssignmentReferenceError,
     SynchronousPolicyError,
 )
 from ramp_optimizer_api.import_routes import BoundedImportBody, import_router
+from ramp_optimizer_api.input_routes import input_router
+from ramp_optimizer_api.input_services import InputConflictError, InputService
+from ramp_optimizer_api.job_routes import job_router
+from ramp_optimizer_api.job_schemas import JobResponse
+from ramp_optimizer_api.job_services import JobConflictError, JobService
 from ramp_optimizer_api.mapping import (
     map_optimization_request,
-    optimization_result_to_response,
     validation_issue_to_response,
 )
-from ramp_optimizer_api.policy import enforce_synchronous_policy
 from ramp_optimizer_api.resource_mapping import (
     operational_day_resource_response,
     operational_day_summary_response,
@@ -42,7 +44,6 @@ from ramp_optimizer_api.schemas import (
     OperationalDayListResponse,
     OperationalDayResourceResponse,
     OptimizationRequest,
-    OptimizationResponse,
     OptimizationRunListResponse,
     OptimizationRunResourceResponse,
     ValidationResponse,
@@ -85,7 +86,9 @@ def create_app(
     application = FastAPI(
         title="Ramp Flight Optimizer API",
         version=API_VERSION,
-        description=("Versioned synchronous API adapter for the Phase 1 ramp optimizer."),
+        description=(
+            "Versioned input management and background optimization jobs for the Phase 1 ramp optimizer."
+        ),
     )
     if persistence_service is None:
         active_session_factory = session_factory
@@ -109,6 +112,10 @@ def create_app(
         )
     application.add_middleware(BoundedImportBody, max_bytes=limits.max_bytes)
     application.include_router(import_router(import_service))
+    application.include_router(input_router(InputService(persistence_service.session_factory)))
+    jobs = JobService(persistence_service.session_factory)
+    application.state.job_service = jobs
+    application.include_router(job_router(jobs))
     router = APIRouter(prefix=API_PREFIX)
 
     @router.get("/health", response_model=HealthResponse, tags=["system"])
@@ -142,18 +149,13 @@ def create_app(
 
     @router.post(
         "/optimizations",
-        response_model=OptimizationResponse,
+        response_model=JobResponse,
+        status_code=202,
         responses={422: {"model": ErrorResponse}, 500: {"model": ErrorResponse}},
         tags=["optimizations"],
     )
-    def optimize(request: OptimizationRequest) -> OptimizationResponse:
-        mapped = map_optimization_request(request)
-        if mapped.issues:
-            raise FixedAssignmentReferenceError(mapped.issues)
-        validate_or_raise(mapped.operational_day, mapped.config)
-        enforce_synchronous_policy(mapped.config.solver_time_limit_seconds)
-        result = optimize_flight_assignments(mapped.operational_day, mapped.config)
-        return optimization_result_to_response(result)
+    def optimize(request: OptimizationRequest) -> JobResponse:
+        return jobs.submit(request=request)
 
     @router.post(
         "/operational-days",
@@ -222,16 +224,14 @@ def create_app(
 
     @router.post(
         "/operational-days/{operational_day_id}/optimizations",
-        response_model=OptimizationRunResourceResponse,
-        status_code=status.HTTP_201_CREATED,
+        response_model=JobResponse,
+        status_code=202,
         tags=["stored optimization runs"],
     )
     def optimize_stored_day(
         operational_day_id: UUID,
-    ) -> OptimizationRunResourceResponse:
-        return optimization_run_resource_response(
-            persistence_service.optimize_operational_day(str(operational_day_id))
-        )
+    ) -> JobResponse:
+        return jobs.submit(source_id=str(operational_day_id))
 
     @router.get(
         "/operational-days/{operational_day_id}/optimization-runs",
@@ -272,6 +272,14 @@ def create_app(
 
 
 def _register_exception_handlers(application: FastAPI) -> None:
+    @application.exception_handler(JobConflictError)
+    async def job_conflict_handler(_request: Request, error: JobConflictError) -> JSONResponse:
+        return _error_response(409, code=error.code, message=str(error))
+
+    @application.exception_handler(InputConflictError)
+    async def input_conflict_handler(_request: Request, error: InputConflictError) -> JSONResponse:
+        return _error_response(409, code=error.code, message=str(error))
+
     @application.exception_handler(ImportError)
     async def import_error_handler(_request: Request, error: ImportError) -> JSONResponse:
         return _error_response(

@@ -13,12 +13,90 @@ from sqlalchemy import (
     String,
     Text,
     UniqueConstraint,
+    event,
+    inspect,
+    select,
 )
-from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
+from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, relationship
 
 
 class Base(DeclarativeBase):
     pass
+
+
+class OptimizationJobRow(Base):
+    __tablename__ = "optimization_jobs"
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('QUEUED','RUNNING','CANCELLING','SUCCEEDED','FAILED','CANCELLED','TIMED_OUT')",
+            name="ck_job_status",
+        ),
+        CheckConstraint("timeout_seconds > 0 AND timeout_seconds <= 3600", name="ck_job_timeout"),
+        Index("ix_jobs_queue", "status", "created_at", "id"),
+    )
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    operational_day_id: Mapped[str] = mapped_column(
+        ForeignKey("operational_days.id", ondelete="RESTRICT")
+    )
+    source_version_id: Mapped[str | None] = mapped_column(
+        ForeignKey("input_versions.id", ondelete="RESTRICT")
+    )
+    input_hash: Mapped[str] = mapped_column(String(64))
+    config_json: Mapped[str] = mapped_column(Text)
+    timeout_seconds: Mapped[float] = mapped_column(Float)
+    active_key: Mapped[str | None] = mapped_column(String(64), unique=True)
+    status: Mapped[str] = mapped_column(String(16))
+    created_at: Mapped[str] = mapped_column(String(32))
+    started_at: Mapped[str | None] = mapped_column(String(32))
+    finished_at: Mapped[str | None] = mapped_column(String(32))
+    worker_token: Mapped[str | None] = mapped_column(String(36))
+    progress_json: Mapped[str] = mapped_column(Text)
+    checkpoint_json: Mapped[str | None] = mapped_column(Text)
+    error_code: Mapped[str | None] = mapped_column(String(64))
+    result_run_id: Mapped[str | None] = mapped_column(
+        ForeignKey("optimization_runs.id", ondelete="RESTRICT"), unique=True
+    )
+
+
+class JobRequestRow(Base):
+    __tablename__ = "optimization_job_requests"
+    key: Mapped[str] = mapped_column(String(128), primary_key=True)
+    request_hash: Mapped[str] = mapped_column(String(64))
+    job_id: Mapped[str] = mapped_column(ForeignKey("optimization_jobs.id", ondelete="RESTRICT"))
+
+
+class InputVersionRow(Base):
+    """Append-only lineage; input content lives in the existing snapshot tables."""
+
+    __tablename__ = "input_versions"
+    __table_args__ = (
+        UniqueConstraint("operational_date", "version_number", name="uq_input_version_number"),
+        UniqueConstraint("operational_date", "idempotency_key", name="uq_input_version_key"),
+        CheckConstraint("version_number >= 1", name="ck_input_version_number"),
+    )
+    id: Mapped[str] = mapped_column(
+        ForeignKey("operational_days.id", ondelete="RESTRICT"), primary_key=True
+    )
+    operational_date: Mapped[date] = mapped_column(Date)
+    version_number: Mapped[int] = mapped_column(Integer)
+    parent_version_id: Mapped[str | None] = mapped_column(
+        ForeignKey("input_versions.id", ondelete="RESTRICT")
+    )
+    source_snapshot_id: Mapped[str | None] = mapped_column(
+        ForeignKey("operational_days.id", ondelete="RESTRICT")
+    )
+    idempotency_key: Mapped[str] = mapped_column(String(128))
+    request_hash: Mapped[str] = mapped_column(String(64))
+    reason: Mapped[str | None] = mapped_column(String(1000))
+    validation_json: Mapped[str] = mapped_column(Text)
+
+
+@event.listens_for(InputVersionRow, "before_update")
+@event.listens_for(InputVersionRow, "before_delete")
+def _reject_version_mutation(_mapper, _connection, _target):
+    from ramp_optimizer_persistence.errors import PersistenceIntegrityError
+
+    raise PersistenceIntegrityError("Input version history is immutable")
 
 
 class ImportJobRow(Base):
@@ -266,3 +344,47 @@ class OptimizationRunRow(Base):
     result_json: Mapped[str] = mapped_column(Text, nullable=False)
 
     operational_day: Mapped[OperationalDayRow] = relationship(back_populates="optimization_runs")
+
+
+@event.listens_for(Session, "before_flush")
+def _protect_version_snapshots(session, _context, _instances):
+    """Reject ORM edits, deletes and child additions to versioned input snapshots."""
+    from ramp_optimizer_persistence.errors import PersistenceIntegrityError
+
+    if not inspect(session.connection()).has_table("input_versions"):
+        return
+    for row in session.new | session.dirty | session.deleted:
+        if isinstance(row, OperationalDayRow):
+            day_id = row.id
+        elif isinstance(row, (EmployeeRow, ShiftRow, FlightRow, FixedAssignmentRow)):
+            day_id = row.operational_day_id or (
+                row.operational_day.id if row.operational_day else None
+            )
+        else:
+            continue
+        if day_id and (
+            session.connection().scalar(
+                select(InputVersionRow.id).where(InputVersionRow.id == day_id)
+            )
+            or (
+                inspect(session.connection()).has_table("optimization_jobs")
+                and session.connection().scalar(
+                    select(OptimizationJobRow.id)
+                    .where(OptimizationJobRow.operational_day_id == day_id)
+                    .limit(1)
+                )
+            )
+        ):
+            # Relationship collection changes caused by adding an optimization run
+            # do not change the immutable input columns.
+            if (
+                isinstance(row, OperationalDayRow)
+                and row not in session.deleted
+                and not session.is_modified(row, include_collections=False)
+                and not any(
+                    inspect(row).attrs[field].history.has_changes()
+                    for field in ("employees", "shifts", "flights", "fixed_assignments")
+                )
+            ):
+                continue
+            raise PersistenceIntegrityError("Versioned input snapshots are immutable")

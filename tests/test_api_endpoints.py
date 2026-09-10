@@ -2,8 +2,8 @@
 
 import importlib
 
-from fastapi.testclient import TestClient
 import pytest
+from fastapi.testclient import TestClient
 
 from ramp_optimizer import optimize_flight_assignments
 from ramp_optimizer.sample_data import (
@@ -15,13 +15,20 @@ from ramp_optimizer_api.mapping import (
     operational_day_to_request,
     optimization_result_to_response,
 )
+from ramp_optimizer_persistence.database import create_database_engine, make_session_factory
+from ramp_optimizer_persistence.models import Base
 from tests.invariant_checks import assert_result_invariants
+from tests.job_helpers import completed_result
 from tests.scenario_builders import small_ready_scenario
 
 
 @pytest.fixture
 def client() -> TestClient:
-    return TestClient(create_app())
+    engine = create_database_engine("sqlite+pysqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    with TestClient(create_app(session_factory=make_session_factory(engine))) as client:
+        yield client
+    engine.dispose()
 
 
 def _payload(scenario) -> dict[str, object]:
@@ -33,11 +40,7 @@ def _payload(scenario) -> dict[str, object]:
 
 def _without_runtimes(value):
     if isinstance(value, dict):
-        return {
-            key: _without_runtimes(item)
-            for key, item in value.items()
-            if "runtime" not in key
-        }
+        return {key: _without_runtimes(item) for key, item in value.items() if "runtime" not in key}
     if isinstance(value, list):
         return [_without_runtimes(item) for item in value]
     return value
@@ -145,9 +148,7 @@ def test_authoritative_values_are_not_silently_coerced(client: TestClient) -> No
         json={
             "operational_day": {
                 "operational_date": "2035-04-15",
-                "employees": [
-                    {"employee_id": 123, "name": "Agent", "enabled": 1}
-                ],
+                "employees": [{"employee_id": 123, "name": "Agent", "enabled": 1}],
             },
             "config": {"minimum_staff": "3"},
         },
@@ -185,9 +186,7 @@ def test_validation_covers_flight_sides_classification_boundary_and_namespaces(
 
     assert response.status_code == 200
     issues = response.json()["issues"]
-    assert [item["code"] for item in issues] == [
-        "ARRIVAL_FLIGHT_NUMBER_WITHOUT_TIME"
-    ]
+    assert [item["code"] for item in issues] == ["ARRIVAL_FLIGHT_NUMBER_WITHOUT_TIME"]
     assert not any("DUPLICATE" in item["code"] for item in issues)
 
 
@@ -208,15 +207,11 @@ def test_invalid_fixed_assignment_is_validation_result_and_optimizer_error(
 
     validation = client.post("/api/v1/operational-days/validate", json=payload)
     assert validation.status_code == 200
-    assert validation.json()["issues"][0]["code"] == (
-        "UNRESOLVED_FIXED_FLIGHT_REFERENCE"
-    )
+    assert validation.json()["issues"][0]["code"] == ("UNRESOLVED_FIXED_FLIGHT_REFERENCE")
 
     optimization = client.post("/api/v1/optimizations", json=payload)
     assert optimization.status_code == 422
-    assert optimization.json()["error"]["code"] == (
-        "FIXED_ASSIGNMENT_REFERENCE_INVALID"
-    )
+    assert optimization.json()["error"]["code"] == ("FIXED_ASSIGNMENT_REFERENCE_INVALID")
 
 
 def test_domain_invalid_optimization_uses_structured_422(client: TestClient) -> None:
@@ -235,23 +230,18 @@ def test_domain_invalid_optimization_uses_structured_422(client: TestClient) -> 
 
     assert response.status_code == 422
     assert response.json()["error"]["code"] == "OPTIMIZER_INPUT_INVALID"
-    assert response.json()["error"]["details"][0]["code"] == (
-        "DUPLICATE_EMPLOYEE_ID"
-    )
+    assert response.json()["error"]["details"][0]["code"] == ("DUPLICATE_EMPLOYEE_ID")
 
 
-def test_synchronous_time_limit_policy_is_explicit(client: TestClient) -> None:
+def test_background_job_accepts_longer_solver_budget(client: TestClient) -> None:
     scenario = small_ready_scenario()
     payload = _payload(scenario)
     payload["config"]["solver_time_limit_seconds"] = 60.01
 
     response = client.post("/api/v1/optimizations", json=payload)
 
-    assert response.status_code == 422
-    assert response.json()["error"]["code"] == "SYNCHRONOUS_POLICY_VIOLATION"
-    assert response.json()["error"]["details"][0]["code"] == (
-        "SYNCHRONOUS_TIME_LIMIT_EXCEEDED"
-    )
+    assert response.status_code == 202
+    assert response.json()["config"]["solver_time_limit_seconds"] == 60.01
 
 
 def test_ready_optimization_preserves_complete_attempt_and_objective_data(
@@ -260,8 +250,8 @@ def test_ready_optimization_preserves_complete_attempt_and_objective_data(
     scenario = small_ready_scenario()
     response = client.post("/api/v1/optimizations", json=_payload(scenario))
 
-    assert response.status_code == 200
-    body = response.json()
+    assert response.status_code == 202
+    body = completed_result(client, response)
     assert body["status"] in {"OPTIMAL", "FEASIBLE"}
     assert body["operational_readiness"] in {"READY", "READY_WITH_WARNINGS"}
     assert body["emergency_lead_staffing_used"] is False
@@ -280,16 +270,14 @@ def test_shortage_is_successful_operational_result_with_warnings(
     scenario = build_staffing_shortage_scenario(solver_time_limit_seconds=2)
     response = client.post("/api/v1/optimizations", json=_payload(scenario))
 
-    assert response.status_code == 200
-    body = response.json()
+    assert response.status_code == 202
+    body = completed_result(client, response)
     assert body["status"] in {"OPTIMAL", "FEASIBLE"}
     assert body["operational_readiness"] == "MANUAL_INTERVENTION_REQUIRED"
     assert body["status"] != body["operational_readiness"]
     assert body["flight_results"][0]["minimum_shortfall"] == 1
     assert body["warnings"]
-    assert "MINIMUM_STAFFING_NOT_MET" in {
-        item["code"] for item in body["warnings"]
-    }
+    assert "MINIMUM_STAFFING_NOT_MET" in {item["code"] for item in body["warnings"]}
 
 
 def test_mainline_express_boundary_is_preserved_in_api_output(
@@ -315,8 +303,8 @@ def test_mainline_express_boundary_is_preserved_in_api_output(
         },
     )
 
-    assert response.status_code == 200
-    assert [item["express"] for item in response.json()["flight_results"]] == [
+    assert response.status_code == 202
+    assert [item["express"] for item in completed_result(client, response)["flight_results"]] == [
         False,
         True,
     ]
@@ -327,8 +315,8 @@ def test_no_usable_schedule_remains_an_honest_200_result(client: TestClient) -> 
 
     response = client.post("/api/v1/optimizations", json=_payload(scenario))
 
-    assert response.status_code == 200
-    body = response.json()
+    assert response.status_code == 202
+    body = completed_result(client, response)
     assert body["status"] == "UNKNOWN"
     assert body["operational_readiness"] == "NO_USABLE_SCHEDULE"
     assert body["flight_results"] == []
@@ -340,8 +328,8 @@ def test_emergency_lead_adoption_is_preserved(client: TestClient) -> None:
     scenario = build_emergency_lead_scenario(solver_time_limit_seconds=2)
     response = client.post("/api/v1/optimizations", json=_payload(scenario))
 
-    assert response.status_code == 200
-    body = response.json()
+    assert response.status_code == 202
+    body = completed_result(client, response)
     assert body["emergency_leads_enabled"] is True
     assert body["emergency_lead_staffing_used"] is True
     assert body["emergency_staffing_status"] == "LEAD_ASSISTED_SCHEDULE"
@@ -356,7 +344,7 @@ def test_api_assignments_agree_between_flight_and_employee_views(
     client: TestClient,
 ) -> None:
     scenario = small_ready_scenario()
-    body = client.post("/api/v1/optimizations", json=_payload(scenario)).json()
+    body = completed_result(client, client.post("/api/v1/optimizations", json=_payload(scenario)))
 
     employees = {item["employee_id"]: item for item in body["employee_results"]}
     for flight_result in body["flight_results"]:
@@ -375,8 +363,8 @@ def test_api_semantics_match_direct_engine_call_excluding_runtime(
 
     response = client.post("/api/v1/optimizations", json=_payload(scenario))
 
-    assert response.status_code == 200
-    assert _without_runtimes(response.json()) == _without_runtimes(expected)
+    assert response.status_code == 202
+    assert _without_runtimes(completed_result(client, response)) == _without_runtimes(expected)
 
 
 def test_unexpected_failures_are_sanitized(monkeypatch) -> None:
@@ -385,7 +373,7 @@ def test_unexpected_failures_are_sanitized(monkeypatch) -> None:
     def fail(*_args, **_kwargs):
         raise RuntimeError("secret path C:\\private\\optimizer.py solver internals")
 
-    monkeypatch.setattr(app_module, "optimize_flight_assignments", fail)
+    monkeypatch.setattr(app_module.JobService, "submit", fail)
     client = TestClient(app_module.create_app(), raise_server_exceptions=False)
     response = client.post(
         "/api/v1/optimizations",

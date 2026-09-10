@@ -87,3 +87,19 @@ release has been created.
 - Phase 1 remains a standalone Python library and CLI validated with synthetic
   data. It does not include a web API, frontend, database, authentication,
   deployment, OCR, live operational feeds, or production integration.
+
+## Milestone 19 — Input-management API
+
+Validated immutable operational-day drafts and complete-snapshot revisions are
+available under `/api/v1`, with optimistic concurrency, idempotency, and preserved
+lineage. Apply migration `20260910_0004`. See the [workflow, routes, validation and
+persistence contract](docs/INPUT_MANAGEMENT.md) and [verification record](docs/INPUT_MANAGEMENT_VALIDATION.md).
+
+## Milestone 20 — Background optimization jobs
+
+Optimization POST routes now return HTTP 202 jobs. A separately launched local
+worker claims durable work and supervises a killable solver process, retaining
+partial checkpoints, diagnostics, exact input provenance and configuration.
+Migration `20260910_0005` adds the queue and idempotency records without changing
+earlier history. See [background jobs](docs/BACKGROUND_JOBS.md)
+and the [verification record](docs/BACKGROUND_JOBS_VALIDATION.md).

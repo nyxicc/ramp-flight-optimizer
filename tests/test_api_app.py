@@ -47,6 +47,15 @@ def test_health_version_and_openapi_contract() -> None:
     assert openapi.status_code == 200
     paths = set(openapi.json()["paths"])
     assert paths == {
+        "/api/v1/optimization-jobs",
+        "/api/v1/optimization-jobs/{job_id}",
+        "/api/v1/optimization-jobs/{job_id}/progress",
+        "/api/v1/optimization-jobs/{job_id}/cancel",
+        "/api/v1/optimization-jobs/{job_id}/result",
+        "/api/v1/operational-days/{day}/drafts",
+        "/api/v1/operational-days/{day}/versions",
+        "/api/v1/operational-day-versions/{version_id}",
+        "/api/v1/operational-day-versions/{version_id}/revisions",
         "/api/v1/imports/daily-flight-log",
         "/api/v1/imports/combine",
         "/api/v1/imports/operational-days/{day_id}/readiness",

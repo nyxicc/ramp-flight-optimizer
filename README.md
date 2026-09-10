@@ -267,8 +267,24 @@ runs and is documentation—not a machine-independent performance gate.
 
 ## Phase 2 direction
 
-Later Phase 2 milestones may place a non-technical UI and job execution around
+Later Phase 2 milestones may place a non-technical UI around
 the stable structured models, add authenticated workflows, and
 connect approved data sources. Those additions should preserve the engine’s pure
 layering, explicit warnings, deterministic sample mode, and solver/readiness
 distinction rather than moving business rules into integration code.
+
+## Milestone 19 — Input-management API
+
+Validated immutable operational-day drafts and complete-snapshot revisions are
+available under `/api/v1`, with optimistic concurrency, idempotency, and preserved
+lineage. Apply migration `20260910_0004`. See the [workflow, routes, validation and
+persistence contract](docs/INPUT_MANAGEMENT.md) and [verification record](docs/INPUT_MANAGEMENT_VALIDATION.md).
+
+## Milestone 20 — Background optimization jobs
+
+Optimization POST routes now return HTTP 202 jobs. A separately launched local
+worker claims durable work and supervises a killable solver process, retaining
+partial checkpoints, diagnostics, exact input provenance and configuration.
+Migration `20260910_0005` adds the queue and idempotency records without changing
+earlier history. See [background jobs](docs/BACKGROUND_JOBS.md)
+and the [verification record](docs/BACKGROUND_JOBS_VALIDATION.md).

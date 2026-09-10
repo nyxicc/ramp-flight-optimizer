@@ -259,11 +259,19 @@ class BoundedImportBody:
         if (
             scope["type"] != "http"
             or scope.get("method") != "POST"
-            or scope.get("path")
-            not in {
-                "/api/v1/imports/teamwork-employee-schedule",
-                "/api/v1/imports/daily-flight-log",
-            }
+            or (
+                scope.get("path")
+                not in {
+                    "/api/v1/imports/teamwork-employee-schedule",
+                    "/api/v1/imports/daily-flight-log",
+                    "/api/v1/optimization-jobs",
+                    "/api/v1/optimizations",
+                }
+                and not (
+                    scope.get("path", "").startswith("/api/v1/operational-")
+                    and scope.get("path", "").endswith(("/drafts", "/revisions"))
+                )
+            )
         ):
             return await self.app(scope, receive, send)
         body = bytearray()

@@ -1,5 +1,8 @@
 # Reviewed employee-schedule imports (Milestone 18A)
 
+Milestone 18B extends this lifecycle for flights and confirmed-input composition;
+see [Flight imports](FLIGHT_IMPORTS.md). The employee contract below remains supported.
+
 Milestone 18A adds a synchronous, review-first TeamWork `.xlsx` import workflow.
 Uploading never creates optimizer input automatically. A client uploads a workbook
 and authoritative roster, reviews a persisted preview, submits explicit corrections,

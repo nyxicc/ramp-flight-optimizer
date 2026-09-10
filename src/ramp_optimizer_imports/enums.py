@@ -5,6 +5,7 @@ from enum import StrEnum
 
 class ImportType(StrEnum):
     TEAMWORK_EMPLOYEE_SCHEDULE = "TEAMWORK_EMPLOYEE_SCHEDULE"
+    DAILY_FLIGHT_LOG = "DAILY_FLIGHT_LOG"
 
 
 class ImportStatus(StrEnum):
@@ -15,8 +16,12 @@ class ImportStatus(StrEnum):
 
 
 TRANSITIONS = {
-    ImportStatus.REVIEW_REQUIRED: frozenset({ImportStatus.REVIEW_REQUIRED, ImportStatus.READY_TO_CONFIRM}),
-    ImportStatus.READY_TO_CONFIRM: frozenset({ImportStatus.REVIEW_REQUIRED, ImportStatus.READY_TO_CONFIRM, ImportStatus.CONFIRMED}),
+    ImportStatus.REVIEW_REQUIRED: frozenset(
+        {ImportStatus.REVIEW_REQUIRED, ImportStatus.READY_TO_CONFIRM}
+    ),
+    ImportStatus.READY_TO_CONFIRM: frozenset(
+        {ImportStatus.REVIEW_REQUIRED, ImportStatus.READY_TO_CONFIRM, ImportStatus.CONFIRMED}
+    ),
     ImportStatus.REJECTED: frozenset(),
     ImportStatus.CONFIRMED: frozenset(),
 }

@@ -1,7 +1,7 @@
 """FastAPI application boundary for synchronous version 1 optimization."""
 
-from importlib.metadata import version as distribution_version
 from datetime import date
+from importlib.metadata import version as distribution_version
 from typing import Annotated, Any
 from uuid import UUID
 
@@ -21,6 +21,7 @@ from ramp_optimizer_api.errors import (
     FixedAssignmentReferenceError,
     SynchronousPolicyError,
 )
+from ramp_optimizer_api.import_routes import BoundedImportBody, import_router
 from ramp_optimizer_api.mapping import (
     map_optimization_request,
     optimization_result_to_response,
@@ -38,16 +39,19 @@ from ramp_optimizer_api.schemas import (
     ErrorDetail,
     ErrorResponse,
     HealthResponse,
-    OptimizationRequest,
-    OptimizationResponse,
     OperationalDayListResponse,
     OperationalDayResourceResponse,
+    OptimizationRequest,
+    OptimizationResponse,
     OptimizationRunListResponse,
     OptimizationRunResourceResponse,
     ValidationResponse,
     VersionResponse,
 )
 from ramp_optimizer_api.services import PersistenceService
+from ramp_optimizer_imports.models import ImportError
+from ramp_optimizer_imports.safety import UploadLimits
+from ramp_optimizer_imports.services import ImportService
 from ramp_optimizer_persistence.database import (
     SessionFactory,
     create_database_engine,
@@ -59,13 +63,8 @@ from ramp_optimizer_persistence.errors import (
     PersistenceIntegrityError,
     ResourceNotFoundError,
 )
-from ramp_optimizer_persistence.settings import DatabaseSettings
-from ramp_optimizer_api.import_routes import BoundedImportBody, import_router
-from ramp_optimizer_imports.models import ImportError
-from ramp_optimizer_imports.safety import UploadLimits
-from ramp_optimizer_imports.services import ImportService
 from ramp_optimizer_persistence.imports import import_transactions
-
+from ramp_optimizer_persistence.settings import DatabaseSettings
 
 API_VERSION = "1"
 API_PREFIX = "/api/v1"
@@ -86,9 +85,7 @@ def create_app(
     application = FastAPI(
         title="Ramp Flight Optimizer API",
         version=API_VERSION,
-        description=(
-            "Versioned synchronous API adapter for the Phase 1 ramp optimizer."
-        ),
+        description=("Versioned synchronous API adapter for the Phase 1 ramp optimizer."),
     )
     if persistence_service is None:
         active_session_factory = session_factory
@@ -103,9 +100,13 @@ def create_app(
             optimizer=optimize_flight_assignments,
         )
     _register_exception_handlers(application)
-    limits = import_limits or (import_service.limits if import_service else UploadLimits.from_environment())
+    limits = import_limits or (
+        import_service.limits if import_service else UploadLimits.from_environment()
+    )
     if import_service is None:
-        import_service = ImportService(import_transactions(persistence_service.session_factory), limits=limits)
+        import_service = ImportService(
+            import_transactions(persistence_service.session_factory), limits=limits
+        )
     application.add_middleware(BoundedImportBody, max_bytes=limits.max_bytes)
     application.include_router(import_router(import_service))
     router = APIRouter(prefix=API_PREFIX)
@@ -182,7 +183,9 @@ def create_app(
             operational_date=operational_date,
         )
         return OperationalDayListResponse(
-            items=tuple(operational_day_summary_response(item) for item in records),
+            items=tuple(
+                with_import_readiness(operational_day_summary_response(item)) for item in records
+            ),
             total=total,
             limit=limit,
             offset=offset,
@@ -194,9 +197,28 @@ def create_app(
         tags=["stored operational days"],
     )
     def get_stored_day(operational_day_id: UUID) -> OperationalDayResourceResponse:
-        return operational_day_resource_response(
-            persistence_service.get_operational_day(str(operational_day_id))
+        return with_import_readiness(
+            operational_day_resource_response(
+                persistence_service.get_operational_day(str(operational_day_id))
+            )
         )
+
+    def with_import_readiness(response):
+        if not response.flight_count:
+            return response
+        readiness = import_service.readiness(str(response.id))
+        if response.flight_count and (
+            readiness["confirmed_employee_schedule"] or readiness["confirmed_flight_log"]
+        ):
+            return response.model_copy(
+                update={
+                    "optimization_eligible": readiness["optimization_eligible"],
+                    "optimization_blockers": ()
+                    if readiness["optimization_eligible"]
+                    else ("CONFIRMED_INPUTS_REQUIRED",),
+                }
+            )
+        return response
 
     @router.post(
         "/operational-days/{operational_day_id}/optimizations",
@@ -252,9 +274,15 @@ def create_app(
 def _register_exception_handlers(application: FastAPI) -> None:
     @application.exception_handler(ImportError)
     async def import_error_handler(_request: Request, error: ImportError) -> JSONResponse:
-        return _error_response(error.status_code, code=error.code,
+        return _error_response(
+            error.status_code,
+            code=error.code,
             message="The import request requires review or correction.",
-            details=tuple(ErrorDetail(code=i.code, path=i.field or "import", message=i.message) for i in error.issues))
+            details=tuple(
+                ErrorDetail(code=i.code, path=i.field or "import", message=i.message)
+                for i in error.issues
+            ),
+        )
 
     @application.exception_handler(RequestValidationError)
     async def request_validation_handler(
@@ -379,9 +407,7 @@ def _error_response(
     message: str,
     details: tuple[ErrorDetail, ...] = (),
 ) -> JSONResponse:
-    envelope = ErrorResponse(
-        error=ErrorBody(code=code, message=message, details=details)
-    )
+    envelope = ErrorResponse(error=ErrorBody(code=code, message=message, details=details))
     return JSONResponse(status_code=status_code, content=envelope.model_dump(mode="json"))
 
 

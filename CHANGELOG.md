@@ -3,6 +3,15 @@
 This project follows a concise, release-oriented changelog. No formal tagged
 release has been created.
 
+## Unreleased — Phase 2 Milestone 18B
+
+- Add a reviewed daily flight-log adapter using the existing Flight model and domain rules.
+- Extend upload, correction, historical revision, and confirmation APIs for flights.
+- Combine confirmed employee and flight imports into immutable operational-day inputs.
+- Add migration `20260909_0003`, worksheet/global-cell limits, and fictional import tests.
+- Document explicit time policy, conservative status handling, privacy, and format limitations
+  in [Flight imports](docs/FLIGHT_IMPORTS.md).
+
 ## Unreleased — Phase 2 Milestone 17
 
 ### Added

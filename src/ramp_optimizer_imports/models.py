@@ -8,6 +8,7 @@ from ramp_optimizer.config import OptimizerConfig, TeamWorkImportConfig
 from ramp_optimizer.enums import IssueSeverity, OperationalRole, Qualification
 from ramp_optimizer.models import Employee, OperationalDay, ScheduleReviewRow
 from ramp_optimizer_imports.enums import ImportStatus, ImportType
+from ramp_optimizer_imports.flight_models import FlightCorrection, FlightReviewRow, FlightTimePolicy
 
 
 @dataclass(frozen=True, slots=True)
@@ -62,6 +63,11 @@ class ImportPreview:
     config: OptimizerConfig
     import_config: TeamWorkImportConfig
     corrections: tuple[RowCorrection, ...] = ()
+    flight_rows: tuple[FlightReviewRow, ...] = ()
+    flight_policy: FlightTimePolicy | None = None
+    flight_corrections: tuple[FlightCorrection, ...] = ()
+    detected_date: date | None = None
+    operational_date_correction: tuple[date, date] | None = None
 
     @property
     def confirmation_eligible(self) -> bool:
@@ -71,7 +77,11 @@ class ImportPreview:
     def status(self) -> ImportStatus:
         if any(issue.severity == IssueSeverity.FATAL for issue in self.issues):
             return ImportStatus.REJECTED
-        return ImportStatus.READY_TO_CONFIRM if self.confirmation_eligible else ImportStatus.REVIEW_REQUIRED
+        return (
+            ImportStatus.READY_TO_CONFIRM
+            if self.confirmation_eligible
+            else ImportStatus.REVIEW_REQUIRED
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -97,10 +107,18 @@ class ImportAdapter(Protocol):
     import_type: ImportType
     schema_version: int
 
-    def parse(self, content: bytes, import_id: str, operational_date: date,
-              roster: tuple[Employee, ...], config: OptimizerConfig) -> ImportPreview: ...
+    def parse(
+        self,
+        content: bytes,
+        import_id: str,
+        operational_date: date,
+        roster: tuple[Employee, ...],
+        config: OptimizerConfig,
+    ) -> ImportPreview: ...
     def revalidate(self, preview: ImportPreview) -> ImportPreview: ...
-    def correct(self, preview: ImportPreview, corrections: tuple[RowCorrection, ...]) -> ImportPreview: ...
+    def correct(
+        self, preview: ImportPreview, corrections: tuple[RowCorrection, ...]
+    ) -> ImportPreview: ...
     def snapshot(self, preview: ImportPreview) -> OperationalDay: ...
 
 
@@ -108,8 +126,15 @@ class ImportRepository(Protocol):
     """One transaction. Implementations must serialize claim before reading."""
 
     def get(self, import_id: str) -> ImportRecord: ...
+    def get_revision(self, import_id: str, revision: int) -> ImportRecord: ...
+    def claim_confirmed(self, import_id: str) -> ImportRecord: ...
     def claim(self, import_id: str, revision: int) -> ImportRecord: ...
     def create(self, record: ImportRecord) -> None: ...
     def revise(self, record: ImportRecord) -> None: ...
     def confirm(self, record: ImportRecord) -> None: ...
     def create_day(self, day: OperationalDay, config: OptimizerConfig) -> str: ...
+    def composition(self, employee_id: str, flight_id: str) -> str | None: ...
+    def compose(
+        self, employee_id: str, flight_id: str, day: OperationalDay, config: OptimizerConfig
+    ) -> str: ...
+    def readiness(self, day_id: str) -> dict[str, str | bool]: ...

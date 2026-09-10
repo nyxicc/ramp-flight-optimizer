@@ -10,7 +10,10 @@ from ramp_optimizer_api.errors import FixedAssignmentReferenceError
 from ramp_optimizer_api.mapping import map_optimization_request, optimization_result_to_response
 from ramp_optimizer_api.policy import enforce_synchronous_policy
 from ramp_optimizer_api.schemas import OptimizationRequest
-from ramp_optimizer_persistence.errors import PersistenceError
+from ramp_optimizer_imports.models import ImportError
+from ramp_optimizer_persistence.database import SessionFactory
+from ramp_optimizer_persistence.errors import DatabaseOperationError, PersistenceError
+from ramp_optimizer_persistence.imports import SQLImportRepository, is_imported_snapshot
 from ramp_optimizer_persistence.repositories import (
     Clock,
     IdProvider,
@@ -25,11 +28,6 @@ from ramp_optimizer_persistence.repositories import (
     list_operational_days,
     list_optimization_runs_for_day,
 )
-from ramp_optimizer_persistence.database import SessionFactory
-from ramp_optimizer_persistence.errors import DatabaseOperationError
-from ramp_optimizer_persistence.imports import is_imported_snapshot
-from ramp_optimizer_imports.models import ImportError
-
 
 PACKAGE_DISTRIBUTION = "ramp-flight-optimizer"
 
@@ -110,6 +108,16 @@ class PersistenceService:
 
     def optimize_operational_day(self, resource_id: str) -> OptimizationRunRecord:
         snapshot = self.get_operational_day(resource_id)
+        with self._session_factory() as session:
+            if is_imported_snapshot(session, resource_id):
+                readiness = SQLImportRepository(session).readiness(resource_id)
+                if not readiness["optimization_eligible"]:
+                    raise ImportError(
+                        "FLIGHT_DATA_REQUIRED"
+                        if not snapshot.day.flights
+                        else "CONFIRMED_EMPLOYEE_SCHEDULE_REQUIRED",
+                        409,
+                    )
         if not snapshot.day.flights:
             try:
                 with self._session_factory() as session:

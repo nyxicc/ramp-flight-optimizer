@@ -2,6 +2,8 @@ __pycache__/
 *.py[cod]
 .pytest_cache/
 .pytest-tmp/
+.ruff_cache/
+.mypy_cache/
 ramp_optimizer.db
 ramp_optimizer.db-journal
 ramp_optimizer.db-wal

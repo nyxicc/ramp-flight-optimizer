@@ -1,3 +1,4 @@
 openpyxl>=3.1,<4
 ortools>=9.12,<10
+tzdata>=2025.2
 pytest>=8,<9

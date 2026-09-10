@@ -1,12 +1,12 @@
 """Bounded upload consumption and pre-open XLSX container validation."""
 
+import os
+import re
+import unicodedata
 from dataclasses import dataclass, fields
 from hashlib import sha256
 from io import BytesIO
-import os
 from pathlib import PurePosixPath
-import re
-import unicodedata
 from xml.etree import ElementTree
 from zipfile import ZipFile
 
@@ -17,6 +17,7 @@ from ramp_optimizer_imports.models import ImportError
 class UploadLimits:
     max_bytes: int = 10 * 1024 * 1024
     max_members: int = 256
+    max_worksheets: int = 16
     max_uncompressed_bytes: int = 64 * 1024 * 1024
     max_member_bytes: int = 16 * 1024 * 1024
     max_compression_ratio: int = 100
@@ -25,30 +26,42 @@ class UploadLimits:
     max_cells: int = 100000
 
     def __post_init__(self):
-        if any(type(getattr(self, f.name)) is not int or getattr(self, f.name) < 1 for f in fields(self)):
+        if any(
+            type(getattr(self, f.name)) is not int or getattr(self, f.name) < 1
+            for f in fields(self)
+        ):
             raise ValueError("Import limits must be positive integers.")
 
     @classmethod
     def from_environment(cls):
-        return cls(**{f.name: int(os.environ['RAMP_IMPORT_' + f.name.upper()])
-                      for f in fields(cls) if 'RAMP_IMPORT_' + f.name.upper() in os.environ})
+        return cls(
+            **{
+                f.name: int(os.environ["RAMP_IMPORT_" + f.name.upper()])
+                for f in fields(cls)
+                if "RAMP_IMPORT_" + f.name.upper() in os.environ
+            }
+        )
 
 
-MEDIA_TYPES = frozenset({
-    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-    "application/octet-stream", "application/zip", "application/x-zip-compressed",
-})
+MEDIA_TYPES = frozenset(
+    {
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        "application/octet-stream",
+        "application/zip",
+        "application/x-zip-compressed",
+    }
+)
 
 
 def validate_filename(filename: str | None, media_type: str | None) -> tuple[str, str]:
     if not filename:
         raise ImportError("UPLOAD_FILENAME_REQUIRED")
     # Never retain a client path. Both Windows and POSIX separators are display-only.
-    safe = filename.replace('\\', '/').rsplit('/', 1)[-1]
-    safe = ''.join('_' if unicodedata.category(c).startswith('C') or c == ':' else c for c in safe)
-    if not safe.lower().endswith('.xlsx') or len(safe) > 255:
+    safe = filename.replace("\\", "/").rsplit("/", 1)[-1]
+    safe = "".join("_" if unicodedata.category(c).startswith("C") or c == ":" else c for c in safe)
+    if not safe.lower().endswith(".xlsx") or len(safe) > 255:
         raise ImportError("UNSUPPORTED_FILE_TYPE", 415)
-    media = (media_type or 'application/octet-stream').split(';', 1)[0].strip().lower()
+    media = (media_type or "application/octet-stream").split(";", 1)[0].strip().lower()
     if media not in MEDIA_TYPES:
         raise ImportError("UNSUPPORTED_FILE_TYPE", 415)
     return safe, media
@@ -79,25 +92,35 @@ def validate_container(content: bytes, limits: UploadLimits) -> None:
         raise ImportError("UPLOAD_EMPTY")
     if len(content) > limits.max_bytes:
         raise ImportError("UPLOAD_TOO_LARGE", 413)
-    if not content.startswith(b'PK\x03\x04'):
+    if not content.startswith(b"PK\x03\x04"):
         raise ImportError("INVALID_XLSX_CONTAINER")
     try:
         with ZipFile(BytesIO(content)) as archive:
+            total_cells = 0
             members = archive.infolist()
             names = {member.filename for member in members}
-            if (len(members) > limits.max_members or len(names) != len(members)
-                    or sum(m.file_size for m in members) > limits.max_uncompressed_bytes):
+            if (
+                len(members) > limits.max_members
+                or len(names) != len(members)
+                or sum(m.file_size for m in members) > limits.max_uncompressed_bytes
+            ):
                 raise ImportError("SUSPICIOUS_XLSX_ARCHIVE")
-            if not {'[Content_Types].xml', 'xl/workbook.xml', '_rels/.rels'} <= names:
+            if not {"[Content_Types].xml", "xl/workbook.xml", "_rels/.rels"} <= names:
                 raise ImportError("INVALID_XLSX_CONTAINER")
             for member in members:
                 name = member.filename
-                if (member.flag_bits & 1 or member.file_size > limits.max_member_bytes
-                        or member.file_size / max(1, member.compress_size) > limits.max_compression_ratio
-                        or name.startswith('/') or '\\' in name or ':' in name
-                        or '..' in PurePosixPath(name).parts):
+                if (
+                    member.flag_bits & 1
+                    or member.file_size > limits.max_member_bytes
+                    or member.file_size / max(1, member.compress_size)
+                    > limits.max_compression_ratio
+                    or name.startswith("/")
+                    or "\\" in name
+                    or ":" in name
+                    or ".." in PurePosixPath(name).parts
+                ):
                     raise ImportError("SUSPICIOUS_XLSX_ARCHIVE")
-                if name.lower().endswith('vbaproject.bin'):
+                if name.lower().endswith("vbaproject.bin"):
                     raise ImportError("UNSUPPORTED_FILE_TYPE", 415)
                 # Reading bounded members verifies CRC and actual decompression. No extraction.
                 with archive.open(member) as stream:
@@ -106,39 +129,49 @@ def validate_container(content: bytes, limits: UploadLimits) -> None:
                     raise ImportError("SUSPICIOUS_XLSX_ARCHIVE")
                 # Relationship targets can rename XML parts. Inspect content, not just
                 # paths/extensions, including UTF-16/32 declarations and BOMs.
-                folded = data.replace(b'\x00', b'').upper()
-                if b'<!DOCTYPE' in folded or b'<!ENTITY' in folded:
+                folded = data.replace(b"\x00", b"").upper()
+                if b"<!DOCTYPE" in folded or b"<!ENTITY" in folded:
                     raise ImportError("SUSPICIOUS_XLSX_ARCHIVE")
-                if name == '[Content_Types].xml' and b'MACROENABLED' in folded:
+                if name == "xl/workbook.xml":
+                    root = ElementTree.fromstring(data)
+                    if (
+                        sum(e.tag.rsplit("}", 1)[-1] == "sheet" for e in root.iter())
+                        > limits.max_worksheets
+                    ):
+                        raise ImportError("SUSPICIOUS_XLSX_ARCHIVE")
+                if name == "[Content_Types].xml" and b"MACROENABLED" in folded:
                     raise ImportError("UNSUPPORTED_FILE_TYPE", 415)
-                looks_xml = folded.lstrip(b'\xef\xbb\xbf\xff\xfe \t\r\n').startswith(b'<')
-                if looks_xml or name.endswith(('.xml', '.rels')):
-                    _validate_sheet(data, limits)
+                looks_xml = folded.lstrip(b"\xef\xbb\xbf\xff\xfe \t\r\n").startswith(b"<")
+                if looks_xml or name.endswith((".xml", ".rels")):
+                    total_cells += _validate_sheet(data, limits)
+                    if total_cells > limits.max_cells:
+                        raise ImportError("SUSPICIOUS_XLSX_ARCHIVE")
     except ImportError:
         raise
     except Exception:
         raise ImportError("INVALID_XLSX_CONTAINER") from None
 
 
-def _validate_sheet(data: bytes, limits: UploadLimits) -> None:
+def _validate_sheet(data: bytes, limits: UploadLimits) -> int:
     cells = rows = row_cells = 0
-    for _, element in ElementTree.iterparse(BytesIO(data), events=('start',)):
-        tag = element.tag.rsplit('}', 1)[-1]
-        if tag == 'row':
+    for _, element in ElementTree.iterparse(BytesIO(data), events=("start",)):
+        tag = element.tag.rsplit("}", 1)[-1]
+        if tag == "row":
             row_cells = 0
             rows += 1
-            if rows > limits.max_rows or int(element.get('r', rows)) > limits.max_rows:
+            if rows > limits.max_rows or int(element.get("r", rows)) > limits.max_rows:
                 raise ImportError("SUSPICIOUS_XLSX_ARCHIVE")
-        if tag == 'c':
+        if tag == "c":
             cells += 1
             row_cells += 1
             if cells > limits.max_cells or row_cells > limits.max_columns:
                 raise ImportError("SUSPICIOUS_XLSX_ARCHIVE")
-        if tag in {'dimension', 'c'}:
-            ref = element.get('ref' if tag == 'dimension' else 'r', '')
-            for column, row in re.findall(r'([A-Z]+)([0-9]+)', ref.upper()):
+        if tag in {"dimension", "c"}:
+            ref = element.get("ref" if tag == "dimension" else "r", "")
+            for column, row in re.findall(r"([A-Z]+)([0-9]+)", ref.upper()):
                 number = 0
                 for letter in column:
                     number = number * 26 + ord(letter) - 64
                 if number > limits.max_columns or int(row) > limits.max_rows:
                     raise ImportError("SUSPICIOUS_XLSX_ARCHIVE")
+    return cells

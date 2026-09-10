@@ -15,8 +15,9 @@ Phase 1—the standalone optimization engine—is complete. Phase 2 Milestones 1
 17 add a versioned FastAPI adapter and immutable SQLite development persistence.
 Milestone 18A adds [reviewed TeamWork employee-schedule imports](docs/IMPORTS.md):
 bounded XLSX upload, persisted previews, explicit corrections, and revision-checked
-confirmation into an immutable employee-only snapshot. Flight-log parsing awaits
-the real format and a sanitized fictional fixture in Milestone 18B.
+confirmation into an immutable employee-only snapshot. Milestone 18B adds
+[reviewed daily flight logs](docs/FLIGHT_IMPORTS.md), flight corrections, and
+composition of both confirmed inputs into a new operational-day snapshot.
 The repository still has no web UI, background jobs, authentication, deployment,
 OCR, schedule-image parsing, or live airline data.
 
@@ -250,8 +251,10 @@ runs and is documentation—not a machine-independent performance gate.
 
 ## Limitations and non-goals
 
-- API inputs support structured JSON and reviewed TeamWork `.xlsx` employee
-  schedules. Real flight-log parsing and live operational feeds are deferred.
+- API inputs support structured JSON, reviewed TeamWork `.xlsx` employee schedules,
+  and the paired daily flight-log layout described in [Flight imports](docs/FLIGHT_IMPORTS.md).
+  Flight imports require an explicit airport time policy and operational review.
+  Live operational feeds remain deferred.
 - Synthetic workload multipliers are explainable defaults, not empirically
   calibrated labor standards.
 - The engine proposes assignments; a qualified supervisor remains responsible

@@ -125,9 +125,13 @@ the unique import linkage. No import operation invokes the optimizer. Preview
 retrieval reads canonical stored JSON, and corrections append immutable revisions.
 
 See [IMPORTS.md](IMPORTS.md) for the dependency diagram and contracts. Milestone 18B
-can add a format-specific flight review adapter only after structural inspection of
-a real sample and construction of a sanitized fictional fixture. This milestone
-defines no flight-log schema, columns, or parser.
+adds `daily_flight_log` for the structurally inspected paired-column format.
+`flight_normalization` handles spreadsheet types and explicit airport time policy;
+review rows wrap the existing domain `Flight`. Shared import services dispatch
+corrections and confirmation by import type. Composition creates a new immutable
+day from two confirmed imports, retaining both original snapshots and a unique
+provenance pair. Neither parsing nor confirmation runs optimization.
+See [FLIGHT_IMPORTS.md](FLIGHT_IMPORTS.md) for the mapping and conservative policies.
 
 The API depends on public models and functions and does not duplicate timing,
 eligibility, readiness, classification, or reporting policy. Future storage adapters,

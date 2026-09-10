@@ -11,6 +11,7 @@ requires-python = ">=3.12"
 dependencies = [
     "openpyxl>=3.1,<4",
     "ortools>=9.12,<10",
+    "tzdata>=2025.2",
 ]
 
 [project.optional-dependencies]
@@ -25,6 +26,8 @@ api = [
 dev = [
     "httpx>=0.28,<0.29",
     "pytest>=8,<9",
+    "ruff>=0.16,<0.17",
+    "mypy>=2.3,<2.4",
 ]
 
 [project.scripts]
@@ -41,3 +44,12 @@ markers = [
     "integration: end-to-end optimizer scenarios spanning multiple layers",
     "slow: bounded performance scenarios excluded from the fast feedback suite",
 ]
+
+[tool.ruff]
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F", "I"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/test_flight_import.py" = ["F811"]

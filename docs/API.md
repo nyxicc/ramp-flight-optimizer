@@ -1,5 +1,8 @@
 # Version 1 API contract
 
+Reviewed flight uploads, revision history, and input composition are documented in
+[Flight imports](FLIGHT_IMPORTS.md), alongside the existing employee import flow.
+
 Phase 2 Milestones 16 and 17 expose the completed Phase 1 optimizer through a small
 FastAPI adapter with optional durable snapshots. The adapter parses structured JSON, maps it to the existing frozen
 domain records, runs the existing validation and optimizer functions synchronously,

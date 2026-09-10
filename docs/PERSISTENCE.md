@@ -1,5 +1,9 @@
 # Persistence
 
+Milestone 18B adds migration `20260909_0003` for the flight import type and immutable
+input composition provenance. See [Flight imports](FLIGHT_IMPORTS.md) for upgrade,
+safe downgrade, and normalized-data retention details.
+
 Milestone 17 adds a local, development-oriented SQLAlchemy 2.x persistence adapter. The dependency flow is `FastAPI -> application service -> repositories -> SQLAlchemy`; the standalone `ramp_optimizer` package does not import the API, persistence, SQLAlchemy, or Alembic layers.
 
 ## Local setup

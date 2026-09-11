@@ -484,6 +484,29 @@ def test_deterministic_preview_order():
     assert [row.source_row for row in first.flight_rows] == [3, 4]
 
 
+def test_older_aog_review_can_be_confirmed_without_manual_status_changes(service):
+    from dataclasses import replace
+
+    from ramp_optimizer.enums import IssueSeverity
+    from ramp_optimizer_imports.enums import ImportStatus
+    from ramp_optimizer_imports.flight_models import FlightStatus
+    from ramp_optimizer_imports.models import ReviewIssue
+
+    record = service.upload_flights(workbook(), "flight.xlsx", "application/octet-stream",
+                                    DAY, POLICY, OptimizerConfig())
+    legacy_preview = replace(record.preview, revision=2,
+        flight_rows=(replace(record.preview.flight_rows[0], status=FlightStatus.AOG),),
+        issues=(ReviewIssue("STATUS_REQUIRES_REVIEW", IssueSeverity.ERROR,
+                            "Resolve the operational status or exclude this record.", 3, "status"),))
+    with service.transactions() as repository:
+        repository.revise(replace(record, preview=legacy_preview, status=ImportStatus.REVIEW_REQUIRED))
+    confirmed = service.confirm(record.import_id, 2)
+    assert confirmed.status == ImportStatus.CONFIRMED
+    assert confirmed.preview.revision == 3
+    assert not confirmed.preview.issues
+    assert service.get_revision(record.import_id, 2).preview.issues
+
+
 def test_arrival_aog_is_also_normal():
     preview = parse([[101, "ABC", "10:00", None, None, None, None, None, None, None, None, "AOG"]])
     assert preview.confirmation_eligible

@@ -88,7 +88,8 @@ and verify that equality with the configured Express threshold is not Express.
 
 Blank status means normal. TERM (optionally followed by digits) normalizes to
 TERMINATING; its numeric suffix is discarded. A terminating row with departure
-demand requires review. AOG and unrecognized statuses block confirmation.
+demand requires review. AOG is treated as normal and does not affect optimization.
+Unrecognized statuses still require review.
 CANCELLED/CANCELED/CXL are explicitly supported and excluded from demand even if
 `excluded` is false. Restoring such demand requires an explicit status correction.
 No delayed, diversion, ferry, or charter interpretation is guessed from notes.
